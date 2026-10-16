@@ -420,6 +420,9 @@ section { display: flex; flex-direction: column; gap: 10px; }
 .px-panel{background:#160b0b;color:#f6dcc2;padding:14px 16px calc(14px + env(safe-area-inset-bottom))}
 .px-panel p{margin:6px 0}.px-got{margin:6px 0 10px;min-height:8px}
 .scanbtn{margin:8px 0}
+.seg.scope{margin:14px 0 4px}
+.statchips{margin:8px 0 10px;gap:6px}.statchips .chip{font-size:.85rem;padding:6px 10px}
+.title-card.jdm{border-color:rgba(240,190,90,.55)}
 </style>
 
 <div class="app" id="app"></div>
@@ -2934,7 +2937,7 @@ function profileHTML(id) {
       ${fort ? `<p>💪 Son jeu fort : <b>${esc(G[fort[0]].name)}</b> (${avg(fort).toFixed(1)} pts par partie)</p>` : ""}
       ${noire && noire[1].gam ? `<p>🕳️ Sa bête noire : <b>${esc(G[noire[0]].name)}</b> (${(noire[1].gam / noire[1].n).toFixed(1)} châtiments par partie)</p>` : ""}
       ${rec && rec.playerId === id ? `<p>👏 Détient le record Tracks : <b>${rec.value} cartes</b></p>` : ""}</div>` : ""}
-    ${pxMeHTML(id)}${pxExtHTML(id)}
+    ${saisonProfileHTML(id)}${pxMeHTML(id)}${pxExtHTML(id)}
     <h4 class="sub">Titres</h4>
     ${Object.keys(tally).length ? `<div class="row">${Object.entries(tally).sort((a, b) => b[1].n - a[1].n).map(([t, v]) => `<span class="chip on">${esc(v.e || "🏆")} ${esc(t)}${v.n > 1 ? ` ×${v.n}` : ""}</span>`).join("")}</div>` : `<p class="muted small">Aucun titre pour l'instant.</p>`}
     <h4 class="sub">Par jeu</h4>
@@ -3177,7 +3180,7 @@ function partieFooter(p) {
   </section>`;
 }
 
-function viewAllTime() {
+function viewAllTimeBase() {
   const ps = Object.values(state.parties);
   const { pts, gam, cs } = totals(ps);
   const ids = Object.keys(state.players);
@@ -3188,7 +3191,6 @@ function viewAllTime() {
   const csTop = sortBoard(cs, ids)[0];
   const last = Object.values(state.soirees).filter(s => s.closed).sort((a, b) => b.date.localeCompare(a.date))[0];
   return `
-  <section><button class="btn block" data-act="px-mine">📱 ${pxOwner() ? "Mon QR joueur" : "Créer mon QR joueur"}</button></section>
   ${last ? `<section><h2>Dernière soirée, ${esc(fmtDate(last.date))}</h2>${titlesHTML(last.titles || [])}<button class="btn block" data-act="recap" data-id="${last.id}">📜 Partager le résumé</button><button class="btn block" data-act="px-soiree" data-id="${last.id}">📲 Chacun récupère ses stats</button></section>` : ""}
   <section>
     <h2>Depuis le début</h2>
@@ -3199,9 +3201,7 @@ function viewAllTime() {
     </div>
   </section>
   <section>
-    ${seg("allBoard", ui.allBoard)}
-    ${ui.allBoard === "lum" ? boardHTML(pts, ids, "lum", " pts", 1) : boardHTML(gam, ids, "ten", " gam.", 1)}
-    <p class="muted small">Touche un joueur pour voir sa fiche.</p>
+    ${statBoardHTML(ps, Object.values(state.soirees), ids)}
     ${csTop && csTop[1] ? `<p class="muted small">Le plus de culs secs : ${esc(name(csTop[0]))} (${csTop[1]}).</p>` : ""}
   </section>
   <section>
@@ -4569,7 +4569,7 @@ function pxSoireeData(sid) {
 async function pxShowMine() {
   const o = pxOwner(); if (!o) { ui.sheet = { step: "px-who" }; render(); return; }
   ui.sheet = { step: "px-moi" }; render();
-  const url = PX_SITE + "#j=" + await pxPack({ v: 1, g: o.g, n: state.players[o.pid].name, s: pxSummary(o.pid) });
+  const url = PX_SITE + "#j=" + await pxPack({ v: 1, g: o.g, n: state.players[o.pid].name, s: pxSummary(o.pid), ss: typeof saisonSummary === "function" ? saisonSummary(o.pid) : undefined });
   if (ui.sheet && ui.sheet.step === "px-moi") { ui.sheet.svg = pxQR(url); render(); }
 }
 async function pxShowSoiree(sid) {
@@ -4665,7 +4665,7 @@ function pxAddScanned(d) {
   const list = Object.values(state.players);
   let pl = list.find(p => p.gid === d.g) || list.find(p => p.name.toLowerCase() === String(d.n).toLowerCase() && (!p.gid || p.gid === d.g));
   const rec = pl ? Object.assign({}, pl) : { id: uid(), name: d.n, created: new Date().toISOString() };
-  rec.gid = rec.gid || d.g; rec.hidden = false; rec.ext = Object.assign({}, d.s || {}, { at: Date.now() });
+  rec.gid = rec.gid || d.g; rec.hidden = false; rec.ext = Object.assign({}, d.s || {}, { at: Date.now(), ss: d.ss });
   put("players", rec.id, rec);
   const s = activeSoiree();
   if (s) { if (!s.playerIds.includes(rec.id)) put("soirees", s.id, Object.assign({}, s, { playerIds: s.playerIds.concat(rec.id) })); }
@@ -4677,6 +4677,7 @@ function pxExtHTML(id) {
   return `<h4 class="sub">📱 Depuis qu'il joue <span class="muted small">(son QR, ${esc(new Date(x.at).toLocaleDateString("fr-FR", { day: "numeric", month: "short" }))})</span></h4>
     <div class="stat"><div><b>${x.so || 0}</b><span>soirées</span></div><div><b>${x.pt || 0}</b><span>points</span></div><div><b>${x.w || 0}</b><span>victoires</span></div>
     <div><b>${x.ga || 0}</b><span>châtiments</span></div><div><b>${x.cs || 0}</b><span>culs secs</span></div><div><b>${x.pa || 0}</b><span>parties</span></div></div>
+    ${x.ss && typeof saisonOf === "function" && x.ss.k === saisonOf(saisonNow()).k && x.ss.so ? `<p class="small">${saisonOf(saisonNow()).e} Cette saison : ${x.ss.so} soirée${x.ss.so > 1 ? "s" : ""}, ${x.ss.pt} pts, ${x.ss.w} victoire${x.ss.w > 1 ? "s" : ""}, ${x.ss.ga} gorg. de Ténèbres</p>` : ""}
     ${(x.ti || []).length ? `<div class="row">${x.ti.map(([e, t, n]) => `<span class="chip on">${esc(e)} ${esc(t)}${n > 1 ? ` ×${n}` : ""}</span>`).join("")}</div>` : ""}`;
 }
 function pxMeHTML(id) {
@@ -4772,6 +4773,105 @@ function pxBoot() {
   pxUnpack(m[2]).then(d => pxOpen(m[1], d)).catch(() => toast("Ce lien est abîmé : redemande le QR."));
 }
 window.addEventListener("hashchange", pxBoot);
+
+/* ---------- Saisons de 3 mois, Joueur du mois, classements par stat ---------- */
+const SAISONS = [["hiver", "Hiver", "❄️"], ["printemps", "Printemps", "🌸"], ["ete", "Été", "☀️"], ["automne", "Automne", "🍂"]];
+const MOIS = ["janvier", "février", "mars", "avril", "mai", "juin", "juillet", "août", "septembre", "octobre", "novembre", "décembre"];
+const saisonNow = () => window.__now ? new Date(window.__now) : new Date();
+// saisons météo : hiver = déc-fév, printemps = mars-mai, été = juin-août, automne = sept-nov
+function saisonOf(date) {
+  const d = new Date(date); const m = d.getMonth(); let y = d.getFullYear();
+  const i = Math.floor(((m + 1) % 12) / 3); if (m === 11) y++; // décembre ouvre l'hiver de l'année suivante
+  const start = new Date(i === 0 ? y - 1 : y, i === 0 ? 11 : i * 3 - 1, 1), end = new Date(start.getFullYear(), start.getMonth() + 3, 1);
+  const [id, nom, e] = SAISONS[i];
+  return { k: y + "-" + id, nom: i === 0 ? `${nom} ${y - 1}-${String(y).slice(2)}` : `${nom} ${y}`, e, start, end };
+}
+function saisonData(k) {
+  const ss = Object.values(state.soirees).filter(s => s.date && saisonOf(s.date).k === k);
+  const sids = new Set(ss.map(s => s.id));
+  const ps = Object.values(state.parties).filter(p => sids.has(p.soireeId));
+  const ids = [...new Set(ss.flatMap(s => s.playerIds || []))];
+  return { ss, ps, ids };
+}
+function statMaps(ps, ss) {
+  const { pts, gam, cs } = totals(ps);
+  const win = {}, so = {}, ti = {}, avg = {};
+  ps.forEach(p => { if (p.status === "done") Object.entries(p.places || {}).forEach(([id, pl]) => { if (pl === 1 && (p.players || []).includes(id)) win[id] = (win[id] || 0) + 1; }); });
+  ss.forEach(s => { (s.playerIds || []).forEach(id => so[id] = (so[id] || 0) + 1); (s.titles || []).forEach(t => t.who.forEach(id => ti[id] = (ti[id] || 0) + 1)); });
+  Object.keys(so).forEach(id => avg[id] = Number(((pts[id] || 0) / so[id]).toFixed(1)));
+  return { pts, gam, cs, win, so, ti, avg };
+}
+const STATS = [["pts", "Points", " pts", "lum"], ["gam", "Ténèbres", " gorg.", "ten"], ["cs", "Culs secs", "", "ten"], ["win", "Victoires", "", "lum"], ["ti", "Titres", "", "lum"], ["so", "Soirées", "", "lum"], ["avg", "Pts / soirée", "", "lum"]];
+function statBoardHTML(ps, ss, ids) {
+  const k = ui.stat || "pts"; const st = STATS.find(x => x[0] === k) || STATS[0]; const maps = statMaps(ps, ss);
+  return `<div class="row statchips" role="tablist">${STATS.map(([id, label]) => `<button class="chip ${id === st[0] ? "on" : ""}" data-act="sa-stat" data-v="${id}" aria-pressed="${id === st[0]}">${label}</button>`).join("")}</div>
+    ${boardHTML(maps[st[0]], ids, st[3], st[2], 1)}<p class="muted small">Touche un joueur pour voir sa fiche.</p>`;
+}
+function topOf(map, ids) { const max = Math.max(0, ...ids.map(i => map[i] || 0)); return max > 0 ? { who: ids.filter(i => (map[i] || 0) === max), v: max } : null; }
+function joueursDuMois(sa) {
+  const out = []; const now = saisonNow();
+  for (let d = new Date(sa.start); d < sa.end && d <= now; d = new Date(d.getFullYear(), d.getMonth() + 1, 1)) {
+    const m = d.getMonth(), y = d.getFullYear();
+    const ss = Object.values(state.soirees).filter(s => { const x = new Date(s.date); return x.getMonth() === m && x.getFullYear() === y; });
+    if (!ss.length) continue;
+    const sids = new Set(ss.map(s => s.id)); const ps = Object.values(state.parties).filter(p => sids.has(p.soireeId));
+    const ids = [...new Set(ss.flatMap(s => s.playerIds || []))]; const t = topOf(totals(ps).pts, ids);
+    if (t) out.push({ mois: MOIS[m], cur: m === now.getMonth() && y === now.getFullYear(), who: t.who, v: t.v, n: ss.length });
+  }
+  return out;
+}
+function viewSaison() {
+  const sa = saisonOf(saisonNow()); const { ss, ps, ids } = saisonData(sa.k);
+  const last = new Date(sa.end - 864e5);
+  const jdm = joueursDuMois(sa);
+  const pal = Object.entries(state.records).filter(([k]) => k.startsWith("saison-")).map(([, r]) => r).sort((a, b) => b.k.localeCompare(a.k));
+  return `<section><h2>${sa.e} ${esc(sa.nom)}</h2><p class="muted small">Jusqu'au ${last.getDate()} ${MOIS[last.getMonth()]} · ${ss.length} soirée${ss.length > 1 ? "s" : ""} cette saison</p>
+    ${jdm.length ? `<div class="titles">${jdm.map(j => `<div class="title-card jdm"><span class="t">⭐ Joueur du mois${j.cur ? " (en cours)" : ""} : ${esc(j.mois)}</span><span class="w">${esc(j.who.map(name).join(", "))}</span><span class="why">${j.v} points en ${j.n} soirée${j.n > 1 ? "s" : ""}${j.cur ? ", pour l'instant" : ""}</span></div>`).join("")}</div>` : ""}</section>
+  <section>${ss.length ? statBoardHTML(ps, ss, ids) : `<div class="empty">La saison commence : la première soirée lance le classement.</div>`}</section>
+  ${pal.length ? `<section><h2>Palmarès des saisons</h2><div class="titles">${pal.map(r => `<div class="title-card"><span class="t">${esc(r.e)} ${esc(r.nom)}</span><span class="why">👑 ${esc(r.lum.map(name).join(", ") || "—")} (${r.pts} pts) · 😈 ${esc(r.ten.map(name).join(", ") || "—")} (${r.gam} gorg.)</span></div>`).join("")}</div></section>` : ""}`;
+}
+function viewAllTime() {
+  const sc = ui.allScope || "saison";
+  return `<section><button class="btn block" data-act="px-mine">📱 ${pxOwner() ? "Mon QR joueur" : "Créer mon QR joueur"}</button></section>
+  <div class="seg scope" role="tablist"><button class="l ${sc === "saison" ? "on" : ""}" data-act="sa-scope" data-v="saison">Saison</button><button class="l ${sc === "all" ? "on" : ""}" data-act="sa-scope" data-v="all">Depuis le début</button></div>
+  ${sc === "saison" ? viewSaison() : viewAllTimeBase()}`;
+}
+function saisonSummary(id) {
+  const sa = saisonOf(saisonNow()); const { ss, ps } = saisonData(sa.k); const m = statMaps(ps, ss);
+  return { k: sa.k, so: m.so[id] || 0, pt: m.pts[id] || 0, ga: m.gam[id] || 0, cs: m.cs[id] || 0, w: m.win[id] || 0 };
+}
+function saisonProfileHTML(id) {
+  const sa = saisonOf(saisonNow()); const x = saisonSummary(id); if (!x.so) return "";
+  return `<h4 class="sub">${sa.e} Cette saison · ${esc(sa.nom)}</h4><div class="stat"><div><b>${x.so}</b><span>soirées</span></div><div><b>${x.pt}</b><span>points</span></div><div><b>${x.w}</b><span>victoires</span></div><div><b>${x.ga}</b><span>Ténèbres</span></div><div><b>${x.cs}</b><span>culs secs</span></div><div><b>${(x.pt / x.so).toFixed(1)}</b><span>pts / soirée</span></div></div>`;
+}
+// fin de saison : à la première ouverture après la fin, on couronne et on garde au palmarès
+function saisonCeremonie() {
+  if (!canWrite) return;
+  const now = saisonNow(); const cur = saisonOf(now).k; const done = {};
+  Object.values(state.soirees).forEach(s => { if (!s.date || !s.closed) return; const sa = saisonOf(s.date); if (sa.k !== cur && sa.end <= now && !state.records["saison-" + sa.k]) done[sa.k] = sa; });
+  const ks = Object.keys(done).sort(); if (!ks.length) return;
+  ks.forEach((k, i) => {
+    const sa = done[k]; const { ss, ps, ids } = saisonData(k); const { pts, gam } = totals(ps);
+    const lum = topOf(pts, ids), ten = topOf(gam, ids);
+    const rec = { k, nom: sa.nom, e: sa.e, lum: lum ? lum.who : [], pts: lum ? lum.v : 0, ten: ten ? ten.who : [], gam: ten ? ten.v : 0, n: ss.length, at: new Date().toISOString() };
+    put("records", "saison-" + k, rec);
+    if (i === ks.length - 1) {
+      if (ten) announce({ k: "ten", e: "😈", t: "Roi des Ténèbres de la saison", who: ten.who, why: `${sa.nom} : ${ten.v} gorgées en ${ss.length} soirées` });
+      if (lum) announce({ k: "lum", e: "👑", t: "Champion de la saison", who: lum.who, why: `${sa.nom} : ${lum.v} points en ${ss.length} soirées` });
+    }
+  });
+}
+(function saisonWatch() {
+  let n = 0; const t = setInterval(() => { n++;
+    if (mode === "pending" || document.querySelector(".intro")) { if (n > 120) clearInterval(t); return; }
+    clearInterval(t); setTimeout(saisonCeremonie, mode === "db" ? 2500 : 300);
+  }, 500);
+})();
+function saAction(act, el) {
+  if (act === "sa-scope") ui.allScope = el.dataset.v;
+  if (act === "sa-stat") ui.stat = el.dataset.v;
+  render();
+}
 
 /* Sons fabriqués dans le navigateur (aucun fichier) */
 let actx = null;
@@ -5171,6 +5271,7 @@ document.addEventListener("click", e => {
   const act = el.dataset.act;
   if (act.startsWith("rit-")) { ritAction(act, el); return; }
   if (act.startsWith("px-")) { pxAction(act, el); return; }
+  if (act.startsWith("sa-")) { saAction(act, el); return; }
   if (act === "sheet-close" && el.classList.contains("sheet-bg") && e.target !== el) return;
   const s = activeSoiree();
   switch (act) {
@@ -5408,6 +5509,15 @@ document.addEventListener("submit", e => {
   const again = document.getElementById(input.id); if (again) again.focus();
 });
 
+(function remiseAZero() {
+  const E = "2026-10-16", K = LS + "-remise";
+  try {
+    if (localStorage.getItem(K) === E) return;
+    let keep = {}; try { const old = JSON.parse(localStorage.getItem(LS) || "{}"); Object.entries(old.records || {}).forEach(([k, v]) => { if (k.startsWith("vu-")) keep[k] = v; }); } catch (e) {}
+    localStorage.setItem(LS, JSON.stringify({ players: {}, soirees: {}, parties: {}, records: keep }));
+    localStorage.removeItem(DIRTY); localStorage.removeItem("lostenebros-moi"); localStorage.setItem(K, E);
+  } catch (e) {}
+})();
 loadLocal();
 render();
 connect();
