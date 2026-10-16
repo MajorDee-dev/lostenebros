@@ -423,6 +423,7 @@ section { display: flex; flex-direction: column; gap: 10px; }
 .seg.scope{margin:14px 0 4px}
 .statchips{margin:8px 0 10px;gap:6px}.statchips .chip{font-size:.85rem;padding:6px 10px}
 .title-card.jdm{border-color:rgba(240,190,90,.55)}
+.confirm .fast{color:#f0be5a;margin:6px 0}
 </style>
 
 <div class="app" id="app"></div>
@@ -3083,6 +3084,7 @@ function viewSoiree() {
 }
 
 function podiumText(p) {
+  if (p.rapide) return "⚡ Trop rapide, pas de points";
   if (p.rit) return p.rit.win != null ? "🏆 " + esc(p.rit.teams[p.rit.win].name) : "Égalité";
   const pl = p.places || {};
   const by = [1, 2, 3].map(r => Object.keys(pl).filter(id => pl[id] === r).map(name)).map((n, i) => n.length ? `${i + 1}. ${n.join(", ")}` : "").filter(Boolean);
@@ -3164,7 +3166,7 @@ function partieFooter(p) {
     const places = partiePlaces(p);
     const pts = pointsFromPlaces(places);
     const rows = p.players.filter(id => pts[id]).sort((a, b) => places[a] - places[b]);
-    return `<section class="confirm"><b>Valider le podium ?</b>${rows.length ? `<ol class="board lum">${rows.map(id => `<li><span class="rank">${places[id]}</span><span class="who">${esc(name(id))}</span><span class="val">+${pts[id]}<span class="unit"> pts</span></span></li>`).join("")}</ol>` : `<p class="muted">Personne ne marque de points.</p>`}
+    return `<section class="confirm"><b>Valider le podium ?</b>${tropRapide(p) ? `<p class="fast">⚡ Partie trop rapide : elle ne donnera pas de points (${dureeTxt(minDuree(p.game))} minimum). Les châtiments comptent quand même.</p>` : ""}${rows.length ? `<ol class="board lum">${rows.map(id => `<li><span class="rank">${places[id]}</span><span class="who">${esc(name(id))}</span><span class="val">+${pts[id]}<span class="unit"> pts</span></span></li>`).join("")}</ol>` : `<p class="muted">Personne ne marque de points.</p>`}
       <div class="row"><button class="btn primary" data-act="end-yes">Valider</button><button class="btn ghost" data-act="confirm-no">Continuer la partie</button></div></section>`;
   }
   if (ui.confirm === "cancel") {
@@ -3817,16 +3819,21 @@ function miniInit(p) {
   return p;
 }
 function miniStopAll() { septStop(); onStop(); dxStop(); tpStop(); qpStop(); }
+const MIN_DUREE = { barbu: 300, biscit: 300, kinito: 300, pyramide: 300, purple: 300, tracks: 300, meme: 300, pmu: 45 };
+function minDuree(game) { return game === "rituel" ? 0 : MIN_DUREE[game] || (G[game] && G[game].mini ? 120 : 0); }
+function tropRapide(p) { const m = minDuree(p.game); return !!(m && p.started && Date.now() - p.started < m * 1000); }
+const dureeTxt = s => s >= 60 ? (s / 60) + " min" : s + " s";
 function endPartie(p) {
-  const places = partiePlaces(p);
-  p.places = places; p.points = pointsFromPlaces(places); p.status = "done"; p.ended = Date.now();
+  const places = partiePlaces(p); const fast = tropRapide(p);
+  p.places = fast ? {} : places; p.points = fast ? {} : pointsFromPlaces(places); p.status = "done"; p.ended = Date.now();
+  if (fast) { p.rapide = 1; setTimeout(() => toast("⚡ Partie trop rapide : pas de points (" + dureeTxt(minDuree(p.game)) + " minimum)."), 50); }
   ui.partieId = null; ui.confirm = null; ui.sheet = { step: "after", game: p.game, players: p.players.slice(), pid: p.id };
   // Biscit : on s'arrête quand on en a marre, retour direct au menu
-  if (p.game === "biscit") { ui.sheet = null; toast("Biscit terminé."); }
+  if (p.game === "biscit") { ui.sheet = null; if (!p.rapide) toast("Biscit terminé."); }
   // PMU : la course suivante se relance toute seule, mêmes joueurs
   if (p.game === "pmu") { ui.sheet = null; const id = uid(); put("parties", p.id, p); ui.partieId = id;
     put("parties", id, { id, soireeId: p.soireeId, game: p.game, players: p.players.slice(), gamelles: [], places: {}, status: "live", started: Date.now() });
-    toast("Course enregistrée. Nouvelle course !"); setTimeout(() => checkLiveTitles(p.soireeId), 300); return; }
+    if (!p.rapide) toast("Course enregistrée. Nouvelle course !"); setTimeout(() => checkLiveTitles(p.soireeId), 300); return; }
   put("parties", p.id, p);
   setTimeout(() => checkLiveTitles(p.soireeId), 300);
 }
@@ -4558,11 +4565,12 @@ function pxSoireeData(sid) {
     if (p.points && Object.keys(p.points).length) o.o = remap(p.points);
     if ((p.gamelles || []).length) o.x = p.gamelles.map(x => { const y = Object.assign({}, x); delete y.t; y.p = I(x.p); return y; });
     if (p.rit) o.r = { w: p.rit.win, n: (p.rit.teams || []).map(t => t.name) };
+    if (p.rapide) o.f = 1;
     return o;
   });
   const T = (s.titles || []).map(t => Object.assign({}, t, { who: t.who.map(I) }));
   const P = ids.map(id => { const pl = state.players[id] || {}; return pl.gid ? [pl.name || "?", pl.gid] : [pl.name || "?"]; });
-  return { v: 1, i: s.src || s.id, d: s.date, n: s.playerIds.length, P, A, T };
+  return { v: 1, i: s.src || s.id, d: s.date, c: s.closedAt, n: s.playerIds.length, P, A, T };
 }
 
 /* les écrans */
@@ -4649,11 +4657,12 @@ function pxImport(d, meIdx) {
   const M = i => map[i]; const R = o2 => { const r = {}; Object.entries(o2 || {}).forEach(([k, v]) => r[M(+k)] = v); return r; };
   const sid = uid();
   state.soirees[sid] = { id: sid, src: d.i, date: d.d, playerIds: d.P.slice(0, d.n || d.P.length).map((_, i) => M(i)),
-    closed: true, closedAt: now, imported: now, titles: (d.T || []).map(t => Object.assign({}, t, { who: t.who.map(M) })) };
+    closed: true, closedAt: d.c || now, imported: now, titles: (d.T || []).map(t => Object.assign({}, t, { who: t.who.map(M) })) };
   writes.push(["soirees", sid]);
   d.A.forEach(a => {
     const id = uid(); const p = { id, soireeId: sid, game: G[a.g] ? a.g : "barbu", players: a.p.map(M), gamelles: (a.x || []).map(x => Object.assign({}, x, { p: M(x.p) })),
       places: R(a.l), points: R(a.o), status: a.st || "done", imported: 1 };
+    if (a.f) p.rapide = 1;
     if (a.r) p.rit = { win: a.r.w, teams: a.r.n.map(name => ({ name })) };
     if (p.status === "live") return; // une partie pas finie ne voyage pas
     state.parties[id] = p; writes.push(["parties", id]);
@@ -4786,8 +4795,14 @@ function saisonOf(date) {
   const [id, nom, e] = SAISONS[i];
   return { k: y + "-" + id, nom: i === 0 ? `${nom} ${y - 1}-${String(y).slice(2)}` : `${nom} ${y}`, e, start, end };
 }
+// une soirée compte pour la saison si elle a au moins 3 joueurs et (une fois finie) a duré au moins 30 min
+function soireeCompte(s) {
+  if ((s.playerIds || []).length < 3) return false;
+  if (!s.closed || !s.closedAt) return true;
+  return new Date(s.closedAt) - new Date(s.date) >= 30 * 60000;
+}
 function saisonData(k) {
-  const ss = Object.values(state.soirees).filter(s => s.date && saisonOf(s.date).k === k);
+  const ss = Object.values(state.soirees).filter(s => s.date && saisonOf(s.date).k === k && soireeCompte(s));
   const sids = new Set(ss.map(s => s.id));
   const ps = Object.values(state.parties).filter(p => sids.has(p.soireeId));
   const ids = [...new Set(ss.flatMap(s => s.playerIds || []))];
@@ -4812,7 +4827,7 @@ function joueursDuMois(sa) {
   const out = []; const now = saisonNow();
   for (let d = new Date(sa.start); d < sa.end && d <= now; d = new Date(d.getFullYear(), d.getMonth() + 1, 1)) {
     const m = d.getMonth(), y = d.getFullYear();
-    const ss = Object.values(state.soirees).filter(s => { const x = new Date(s.date); return x.getMonth() === m && x.getFullYear() === y; });
+    const ss = Object.values(state.soirees).filter(s => { const x = new Date(s.date); return x.getMonth() === m && x.getFullYear() === y && soireeCompte(s); });
     if (!ss.length) continue;
     const sids = new Set(ss.map(s => s.id)); const ps = Object.values(state.parties).filter(p => sids.has(p.soireeId));
     const ids = [...new Set(ss.flatMap(s => s.playerIds || []))]; const t = topOf(totals(ps).pts, ids);
