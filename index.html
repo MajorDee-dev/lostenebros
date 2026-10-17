@@ -460,6 +460,25 @@ section { display: flex; flex-direction: column; gap: 10px; }
 @keyframes tro-sheen{to{background-position:-40% 0}}
 @keyframes tro-fade{to{opacity:1}}
 @media (prefers-reduced-motion:reduce){.tro-rv *,.tro-rays{animation-duration:.01s!important;animation-delay:0s!important}}
+
+/* Coupes de saison */
+.cp-grid{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:8px}
+@media (min-width:480px){.cp-grid{grid-template-columns:repeat(4,minmax(0,1fr))}}
+.cp-img{display:block;width:100%;max-width:120px;aspect-ratio:4/5;border-radius:10px;object-fit:cover;background:radial-gradient(circle at 50% 45%,rgba(255,170,80,.12),transparent 70%),#0a0504}
+.cp-img.lock{filter:grayscale(1) brightness(.5) contrast(1.15);opacity:.55}
+.cp-rv{position:fixed;inset:0;z-index:60;background:#000;overflow:hidden;cursor:pointer;animation:rv-in .3s ease-out}
+.cp-rv canvas.gl{position:absolute;inset:0;width:100%;height:100%;z-index:2}
+.cp-glow{position:absolute;inset:0;z-index:1;background:radial-gradient(circle at 50% 40%,rgba(var(--rc),.35),transparent 60%);opacity:0;transition:opacity 1.2s}
+.cp-rv.flat .cp-glow{opacity:1}
+.cp-txt{position:absolute;left:0;right:0;bottom:calc(48px + env(safe-area-inset-bottom,0px));z-index:4;display:grid;justify-items:center;gap:6px;text-align:center;
+  padding-left:max(16px,env(safe-area-inset-left,0px));padding-right:max(16px,env(safe-area-inset-right,0px))}
+.cp-tier{font-family:"Barlow Condensed","Arial Narrow",sans-serif;text-transform:uppercase;letter-spacing:.32em;font-weight:700;font-size:.9rem;color:rgb(var(--rc));opacity:0;animation:tro-fade .8s 3.4s forwards}
+.cp-nm{font-family:"Pirata One",Georgia,serif;font-size:clamp(2.2rem,9vw,3.8rem);line-height:1;min-height:1em;color:var(--fg);text-shadow:0 0 24px rgba(var(--rc),.6),0 2px 0 #000}
+.cp-who{color:var(--muted);opacity:0;animation:tro-fade .8s 5.4s forwards;max-width:36ch}
+.cp-tap{position:absolute;bottom:calc(14px + env(safe-area-inset-bottom,0px));left:0;right:0;text-align:center;color:var(--muted);font-size:.8rem;opacity:0;animation:tro-fade 1s 6.5s forwards;z-index:4}
+.cp-flash{position:absolute;inset:0;z-index:3;pointer-events:none;background:radial-gradient(circle at 50% 45%,rgba(var(--rc),.55),transparent 60%);opacity:0;animation:cp-flash 1.6s 2.7s ease-out}
+@keyframes cp-flash{0%{opacity:0}12%{opacity:1}100%{opacity:0}}
+@media (prefers-reduced-motion:reduce){.cp-rv *{animation-duration:.01s!important;animation-delay:0s!important}}
 </style>
 
 <div class="app" id="app"></div>
@@ -2975,7 +2994,7 @@ function profileHTML(id) {
       ${noire && noire[1].gam ? `<p>🕳️ Sa bête noire : <b>${esc(G[noire[0]].name)}</b> (${(noire[1].gam / noire[1].n).toFixed(1)} châtiments par partie)</p>` : ""}
       ${rec && rec.playerId === id ? `<p>👏 Détient le record Tracks : <b>${rec.value} cartes</b></p>` : ""}</div>` : ""}
     ${saisonProfileHTML(id)}${pxMeHTML(id)}${pxExtHTML(id)}
-    ${troVitrineHTML(id)}
+    ${troVitrineHTML(id)}${typeof coupeVitrineHTML === "function" ? coupeVitrineHTML(id) : ""}
     <h4 class="sub">Titres</h4>
     ${Object.keys(tally).length ? `<div class="row">${Object.entries(tally).sort((a, b) => b[1].n - a[1].n).map(([t, v]) => `<span class="chip on">${esc(v.e || "🏆")} ${esc(t)}${v.n > 1 ? ` ×${v.n}` : ""}</span>`).join("")}</div>` : `<p class="muted small">Aucun titre pour l'instant.</p>`}
     <h4 class="sub">Par jeu</h4>
@@ -4909,7 +4928,7 @@ function saisonCeremonie() {
     put("records", "saison-" + k, rec);
     if (i === ks.length - 1) {
       if (ten) announce({ k: "ten", e: "😈", t: "Roi des Ténèbres de la saison", who: ten.who, why: `${sa.nom} : ${ten.v} gorgées en ${ss.length} soirées` });
-      if (lum) announce({ k: "lum", e: "👑", t: "Champion de la saison", who: lum.who, why: `${sa.nom} : ${lum.v} points en ${ss.length} soirées` });
+      if (lum) { if (typeof coupeReveal === "function") { TroMusic.preloadMusic([[3, COUPE_MUSIC[coupeSaison(k)]]]); announce({ coupe: { s: coupeSaison(k), nom: sa.nom, who: lum.who, why: coupeWhy(rec) } }); } else announce({ k: "lum", e: "👑", t: "Champion de la saison", who: lum.who, why: `${sa.nom} : ${lum.v} points en ${ss.length} soirées` }); }
     }
   });
 }
@@ -5243,6 +5262,560 @@ function troAction(act, el) {
   if (act === "tro-end") { const s = state.soirees[el.dataset.id]; (s && s.tro || []).forEach(u => announce({ tro: u })); }
 }
 TroMusic.preloadMusic([[1, {}], [2, {}], [3, {}]]);
+
+/* ---------- Coupes de saison en 3D (three.js chargé seulement quand une coupe s'affiche) ---------- */
+const Coupe3D = (function () {
+  const LIBS = ["https://cdnjs.cloudflare.com/ajax/libs/three.js/r128/three.min.js",
+    ...["shaders/CopyShader", "shaders/LuminosityHighPassShader", "postprocessing/EffectComposer", "postprocessing/RenderPass", "postprocessing/ShaderPass", "postprocessing/UnrealBloomPass"].map(f => "https://cdn.jsdelivr.net/npm/three@0.128.0/examples/js/" + f + ".js")];
+  const script = src => new Promise((ok, ko) => { const s = document.createElement("script"); s.src = src; s.onload = ok; s.onerror = ko; document.head.appendChild(s); });
+  let ready = null;
+  function load() {
+    if (!ready) ready = (async () => { if (!window.THREE) await script(LIBS[0]); for (const f of LIBS.slice(1)) await script(f); return build(); })().catch(e => { ready = null; throw e; });
+    return ready;
+  }
+  function build() {
+const CUPS = [
+  { id: "automne", season: "Automne 2026", name: "Le Calice des Moissons", accent: "#e08848", rc: "230,140,80", bg: [70, 34, 16],
+    text: "Un calice de cuivre martelé, ciselé d'une frise de chêne. Des racines enserrent le pied, deux gerbes de blé croisées ornent la face, une couronne de feuilles d'or et de glands borde la lèvre. Il déborde d'un vin d'ambre.", mats: ["Cuivre martelé", "Or patiné", "Ambre"] },
+  { id: "hiver", season: "Hiver 2026-27", name: "La Couronne de Givre", accent: "#bcd6ee", rc: "190,220,255", bg: [20, 34, 58],
+    text: "Une coupe d'argent élancée, gravée de fougères de givre. Une couronne de prismes de glace jaillit de la lèvre, des fils d'argent s'enroulent sur la tige et un flocon serti de saphir brille sur la face. La neige tombe autour.", mats: ["Argent gravé", "Cristal de glace", "Saphir"] },
+  { id: "printemps", season: "Printemps 2027", name: "Le Graal des Roses", accent: "#e8556a", rc: "240,120,130", bg: [62, 16, 26],
+    text: "Un graal d'or repoussé de rinceaux. Une guirlande de roses rouges ceint la panse, une ronce à épines grimpe le long du pied, la lèvre s'ouvre en pétales d'or. Des pétales tombent doucement.", mats: ["Or repoussé", "Émail", "Rubis"] },
+  { id: "ete", season: "Été 2027", name: "La Coupe du Solstice", accent: "#f0c75a", rc: "245,200,90", bg: [72, 44, 10],
+    text: "Une coupe d'or massif guillochée, coiffée de flammes incandescentes. Un grand soleil au cœur de rubis rayonne sur la face, les anses s'enroulent comme du feu, et la coupe est remplie d'or en fusion.", mats: ["Or guilloché", "Flammes", "Rubis"] }
+];
+let PLATE = null;
+/* ================= outils ================= */
+const T = window.THREE;
+const V2 = (x, y) => new T.Vector2(x, y), V3 = (x, y, z) => new T.Vector3(x, y, z);
+const cnv = (w, h) => { const c = document.createElement("canvas"); c.width = w; c.height = h; return [c, c.getContext("2d")]; };
+let seed = 7; const rnd = () => (seed = (seed * 16807) % 2147483647) / 2147483647;
+const hash = (x, y) => { const s = Math.sin(x * 127.1 + y * 311.7) * 43758.5453; return s - Math.floor(s); };
+const vnoise = (x, y) => { const xi = Math.floor(x), yi = Math.floor(y), xf = x - xi, yf = y - yi, u = xf * xf * (3 - 2 * xf), v = yf * yf * (3 - 2 * yf);
+  const a = hash(xi, yi), b = hash(xi + 1, yi), c = hash(xi, yi + 1), d = hash(xi + 1, yi + 1); return a + (b - a) * u + (c - a) * v + (a - b - c + d) * u * v; };
+const fbm = (x, y) => { let s = 0, a = .5; for (let k = 0; k < 5; k++) { s += a * vnoise(x, y); x *= 2.03; y *= 2.03; a *= .5; } return s; };
+const CANV = {}; // les dessins (canvas) sont partagés, les textures sont faites par scène
+function tex(c, srgb) { const t = new T.CanvasTexture(c); if (srgb) t.encoding = T.sRGBEncoding; t.anisotropy = 8; t.wrapS = T.RepeatWrapping; return t; }
+
+/* ---------- marbre noir veiné d'or (socle) ---------- */
+function marbleCanvases() {
+  if (CANV.marble) return CANV.marble;
+  const W = 512, H = 256, [cc, c] = cnv(W, H), [cr, r] = cnv(W, H), ic = c.createImageData(W, H), ir = r.createImageData(W, H);
+  for (let y = 0; y < H; y++) for (let x = 0; x < W; x++) {
+    const nx = x / W * 6, ny = y / H * 3, t = fbm(nx, ny) * 5;
+    const v1 = Math.pow(1 - Math.abs(Math.sin((nx + ny * .6) * 2.2 + t)), 18), v2 = Math.pow(1 - Math.abs(Math.sin((nx * .7 - ny) * 3.1 + t * 1.3)), 40);
+    const base = 8 + fbm(nx * 3, ny * 3) * 14, i = (y * W + x) * 4, gold = Math.min(1, v2 * 1.6);
+    ic.data[i] = base + v1 * 50 + gold * 200; ic.data[i + 1] = base * .8 + v1 * 44 + gold * 140; ic.data[i + 2] = base * .7 + v1 * 40 + gold * 50; ic.data[i + 3] = 255;
+    ir.data[i] = 0; ir.data[i + 1] = 40 + v1 * 50 + gold * 30; ir.data[i + 2] = gold * 255; ir.data[i + 3] = 255;
+  }
+  c.putImageData(ic, 0, 0); r.putImageData(ir, 0, 0); return CANV.marble = { map: cc, mr: cr };
+}
+
+/* ---------- ciselure : une carte de relief (bump) + une patine (map) dessinées à la main pour chaque coupe ---------- */
+function engraving(kind, H) {
+  if (CANV["e-" + kind]) return CANV["e-" + kind];
+  const W = 2048, HH = 1024, [cb, b] = cnv(W, HH), [cm, m] = cnv(W, HH);
+  b.fillStyle = "rgb(128,128,128)"; b.fillRect(0, 0, W, HH); m.fillStyle = "#fff"; m.fillRect(0, 0, W, HH);
+  [b, m].forEach(x => { x.lineCap = "round"; x.lineJoin = "round"; });
+  const Y = y => (1 - y / H) * HH;
+  const tint = { automne: "rgba(70,24,8,", hiver: "rgba(40,70,120,", printemps: "rgba(80,40,0,", ete: "rgba(90,40,0," }[kind];
+  // dessine la même chose sur les deux toiles, et recopie de l'autre côté de la couture
+  const both = (x, y, rot, s, fn) => [0, -W, W].forEach(dx => { if (dx && Math.abs(x + dx - W / 2) > W / 2 + 260) return;
+    [b, m].forEach(cx => { cx.save(); cx.translate(x + dx, y); cx.rotate(rot); cx.scale(s, s); }); fn(s); [b, m].forEach(cx => cx.restore()); });
+  const raised = (p, w) => { m.strokeStyle = tint + ".55)"; m.lineWidth = w * 1.8; m.stroke(p); m.strokeStyle = "rgba(255,250,236,1)"; m.lineWidth = w * .6; m.stroke(p);
+    [[1, 150], [.7, 182], [.42, 218], [.18, 245]].forEach(([k, g]) => { b.strokeStyle = `rgb(${g},${g},${g})`; b.lineWidth = w * k; b.stroke(p); }); };
+  const raisedFill = (p, w) => { m.strokeStyle = tint + ".6)"; m.lineWidth = w; m.stroke(p); m.fillStyle = "#fff"; m.fill(p);
+    b.strokeStyle = "rgb(150,150,150)"; b.lineWidth = w; b.stroke(p); b.fillStyle = "rgb(190,190,190)"; b.fill(p); b.strokeStyle = "rgb(210,210,210)"; b.lineWidth = w * .35; b.stroke(p); };
+  const groove = (p, w, a = .75) => { m.strokeStyle = tint + a + ")"; m.lineWidth = w; m.stroke(p); b.strokeStyle = "rgb(84,84,84)"; b.lineWidth = w; b.stroke(p); b.strokeStyle = "rgb(44,44,44)"; b.lineWidth = w * .45; b.stroke(p); };
+  const hline = (y, w, up) => { const p = new Path2D(); p.moveTo(-10, Y(y)); p.lineTo(W + 10, Y(y)); up ? raised(p, w) : groove(p, w); };
+  const beads = (y, r, n) => { for (let k = 0; k < n; k++) { const x = (k + .5) * W / n, yy = Y(y);
+    const g = b.createRadialGradient(x - r * .3, yy - r * .3, 0, x, yy, r); g.addColorStop(0, "rgb(250,250,250)"); g.addColorStop(.7, "rgb(170,170,170)"); g.addColorStop(1, "rgb(110,110,110)");
+    b.fillStyle = g; b.beginPath(); b.arc(x, yy, r, 0, 7); b.fill(); m.strokeStyle = tint + ".5)"; m.lineWidth = 2; m.beginPath(); m.arc(x, yy, r, 0, 7); m.stroke(); } };
+  const flutes = (y0, y1, n, round) => { const w = W / n; for (let k = 0; k < n; k++) { const x0 = k * w, g = b.createLinearGradient(x0, 0, x0 + w, 0);
+    g.addColorStop(0, "rgb(96,96,96)"); g.addColorStop(.35, "rgb(200,200,200)"); g.addColorStop(.6, "rgb(176,176,176)"); g.addColorStop(1, "rgb(96,96,96)"); b.fillStyle = g;
+    const p = new Path2D(); p.moveTo(x0 + 2, Y(y0)); p.lineTo(x0 + 2, Y(y1) + (round ? w * .5 : 0)); if (round) p.quadraticCurveTo(x0 + w / 2, Y(y1) - w * .4, x0 + w - 2, Y(y1) + w * .5); else p.lineTo(x0 + w - 2, Y(y1)); p.lineTo(x0 + w - 2, Y(y0)); p.closePath();
+    b.fill(p); m.strokeStyle = tint + ".45)"; m.lineWidth = 3; m.stroke(p); } };
+  const dimples = (y0, y1, n, r0, r1) => { for (let k = 0; k < n; k++) { const x = rnd() * W, y = Y(y0 + (y1 - y0) * rnd()), r = r0 + (r1 - r0) * rnd();
+    const g = b.createRadialGradient(x + r * .25, y + r * .25, 0, x, y, r); g.addColorStop(0, "rgba(96,96,96,.55)"); g.addColorStop(.8, "rgba(150,150,150,.35)"); g.addColorStop(1, "rgba(128,128,128,0)");
+    b.fillStyle = g; b.beginPath(); b.arc(x, y, r, 0, 7); b.fill(); if (rnd() < .25) { m.fillStyle = tint + ".06)"; m.beginPath(); m.arc(x, y, r * .8, 0, 7); m.fill(); } } };
+  const oak = () => { const p = new Path2D(), L = [[.14, -.15], [.3, -.2], [.2, -.36], [.36, -.47], [.22, -.6], [.3, -.75], [.12, -.84], [0, -1]];
+    p.moveTo(0, 0); L.forEach(([x, y]) => p.quadraticCurveTo(x + .07, y + .02, x, y)); for (let i = L.length - 2; i >= 0; i--) { const [x, y] = L[i]; p.quadraticCurveTo(-x - .07, y - .02, -x, y); } p.quadraticCurveTo(-.06, -.02, 0, 0); p.closePath(); return p; };
+  const vein = () => { const p = new Path2D(); p.moveTo(0, .05); p.lineTo(0, -.9); [-.2, -.42, -.62].forEach(y => { p.moveTo(0, y); p.lineTo(.2, y - .12); p.moveTo(0, y); p.lineTo(-.2, y - .12); }); return p; };
+  const leafP = () => { const p = new Path2D(); p.moveTo(0, 0); p.quadraticCurveTo(.42, -.45, 0, -1); p.quadraticCurveTo(-.42, -.45, 0, 0); p.closePath(); return p; };
+
+  if (kind === "automne") {
+    dimples(1.02, 2.15, 2600, 5, 16); dimples(.0, .5, 400, 4, 9);
+    flutes(1.02, 1.22, 36, true); hline(1.26, 7, true); beads(1.31, 6, 110); hline(1.92, 7, true); beads(1.87, 6, 110);
+    // frise : une branche ondulante avec feuilles de chêne et glands
+    const per = W / 6, vine = new Path2D(); for (let x = -20; x <= W + 20; x += 8) { const yy = Y(1.585) + Math.sin(x / per * Math.PI * 2) * 52; x < -10 ? vine.moveTo(x, yy) : vine.lineTo(x, yy); } raised(vine, 14);
+    for (let k = 0; k < 12; k++) { const x = (k + .25) * per / 2, up = k % 2 === 0, yy = Y(1.585) + Math.sin(x / per * Math.PI * 2) * 52;
+      both(x, yy, up ? -.5 : Math.PI + .5, 120, s => { raisedFill(oak(), 4 / s); groove(vein(), 3 / s, .55); });
+      both(x + per * .2, yy + (up ? 26 : -26), 0, 1, () => { const a = new Path2D(); a.ellipse(0, up ? 22 : -22, 16, 22, 0, 0, 7); raisedFill(a, 4); const cp = new Path2D(); cp.ellipse(0, up ? 4 : -4, 19, 12, 0, 0, 7); raisedFill(cp, 4);
+        for (let h = -2; h <= 2; h++) { const l = new Path2D(); l.moveTo(h * 7 - 6, up ? -4 : 4); l.lineTo(h * 7 + 6, up ? 12 : -12); groove(l, 2, .5); } }); }
+  }
+  if (kind === "hiver") {
+    // fougères de givre qui montent du bas de la coupe et descendent de la lèvre
+    const fern = (x, y, ang, len, d) => { const p = new Path2D(); const x2 = x + Math.cos(ang) * len, y2 = y + Math.sin(ang) * len; p.moveTo(x, y); p.lineTo(x2, y2); groove(p, Math.max(1.4, d * 1.6), .35 + d * .12);
+      if (d <= 0) return; const n = 4 + d; for (let k = 1; k < n; k++) { const t = k / n, px = x + (x2 - x) * t, py = y + (y2 - y) * t, l = len * .42 * (1 - t * .5);
+        fern(px, py, ang - 1.0 - rnd() * .2, l, d - 1); fern(px, py, ang + 1.0 + rnd() * .2, l, d - 1); } };
+    for (let k = 0; k < 15; k++) { const x = (k + rnd() * .6) * W / 15; fern(x, Y(1.5), -Math.PI / 2 + (rnd() - .5) * .7, 150 + rnd() * 90, 3); }
+    for (let k = 0; k < 15; k++) { const x = (k + .5 + rnd() * .4) * W / 15; fern(x, Y(2.3), Math.PI / 2 + (rnd() - .5) * .8, 90 + rnd() * 60, 2); }
+    hline(2.31, 6, true); beads(2.27, 5, 120); hline(1.5, 6, true);
+    for (let k = 0; k < 40; k++) { const x = rnd() * W, y = Y(.02 + rnd() * .1); const p = new Path2D(); for (let a = 0; a < 6; a++) { p.moveTo(x, y); p.lineTo(x + Math.cos(a * 1.047) * 10, y + Math.sin(a * 1.047) * 10); } groove(p, 2, .5); }
+    // fines rainures verticales sur la tige
+    for (let k = 0; k < 48; k++) { const x = k * W / 48, p = new Path2D(); p.moveTo(x, Y(1.12)); p.lineTo(x, Y(.42)); groove(p, 5, .35); }
+  }
+  if (kind === "printemps") {
+    flutes(1.12, 1.3, 30, true); hline(1.34, 7, true); beads(1.39, 6, 110); beads(1.98, 6, 110); hline(2.03, 6, true);
+    // rinceaux : volutes en S avec rosettes et feuilles, en repoussé
+    const per = W / 7;
+    for (let k = 0; k < 7; k++) { const x0 = k * per, yc = Y(1.69);
+      both(x0, yc, 0, 1, () => { const s = new Path2D(); s.moveTo(-per * .5, 30); s.bezierCurveTo(-per * .25, -90, per * .25, 90, per * .5, -30); raised(s, 12);
+        [[-per * .28, -38, 1], [per * .28, 38, -1]].forEach(([cx, cy, dir]) => { const sp = new Path2D(); for (let t = 0; t < 12; t += .2) { const rr = 4 + t * 3.3, a = dir * t; const px = cx + Math.cos(a) * rr, py = cy + Math.sin(a) * rr; t ? sp.lineTo(px, py) : sp.moveTo(px, py); } raised(sp, 7);
+          for (let q = 0; q < 6; q++) { const a = q / 6 * Math.PI * 2, pe = new Path2D(); pe.ellipse(cx + Math.cos(a) * 52, cy + Math.sin(a) * 52, 22, 13, a, 0, 7); raisedFill(pe, 3); } }); });
+      [[per * .02, -60, -.9], [per * .02, 60, Math.PI + .9], [-per * .45, -70, -.3], [per * .45, 70, Math.PI - .3]].forEach(([dx, dy, r]) => both(x0 + dx, yc + dy, r, 70, s => { raisedFill(leafP(), 3 / s); groove(vein(), 2.5 / s, .45); })); }
+    for (let k = 0; k < 64; k++) { const x = k * W / 64, p = new Path2D(); p.moveTo(x, Y(.02)); p.lineTo(x, Y(.12)); raised(p, 6); }
+  }
+  if (kind === "ete") {
+    // guillochage : des dizaines de fines vagues gravées qui font onduler la lumière
+    for (let k = 0; k < 34; k++) { const p = new Path2D(), y0 = Y(1.24) - k * 13, ph = k * .45; for (let x = -10; x <= W + 10; x += 6) { const yy = y0 + Math.sin(x / W * Math.PI * 2 * 28 + ph) * 7; x < -5 ? p.moveTo(x, yy) : p.lineTo(x, yy); } groove(p, 2.6, .5); }
+    hline(1.22, 8, true); beads(1.17, 6, 110);
+    // rayons de soleil en relief qui montent de la base de la panse
+    const n = 40; for (let k = 0; k < n; k++) { const x = (k + .5) * W / n, L = k % 2 ? 80 : 130; const p = new Path2D(); p.moveTo(x - 18, Y(1.0)); p.lineTo(x, Y(1.0) - L); p.lineTo(x + 18, Y(1.0)); p.closePath(); raisedFill(p, 3); }
+    hline(1.72, 7, true); beads(1.77, 5, 120); hline(2.1, 6, true);
+    for (let k = 0; k < 72; k++) { const x = k * W / 72, p = new Path2D(); p.moveTo(x, Y(1.84)); p.lineTo(x + 18, Y(2.06)); groove(p, 3, .45); }
+    flutes(.02, .14, 48, false);
+  }
+  // l'intérieur de la coupe (rangée du haut) reste lisse
+  b.fillStyle = "rgb(128,128,128)"; b.fillRect(0, 0, W, 6); m.fillStyle = "#fff"; m.fillRect(0, 0, W, 6);
+  return CANV["e-" + kind] = { bump: cb, map: cm };
+}
+
+/* ---------- textures de particules et d'éclats ---------- */
+function sprite(kind) {
+  if (CANV["s-" + kind]) return CANV["s-" + kind];
+  const [c, x] = cnv(64, 64); x.translate(32, 32);
+  if (kind === "glint") { const g = x.createRadialGradient(0, 0, 0, 0, 0, 32); g.addColorStop(0, "rgba(255,255,255,1)"); g.addColorStop(.08, "rgba(255,240,210,.5)"); g.addColorStop(.3, "rgba(255,220,160,.06)"); g.addColorStop(1, "rgba(255,220,160,0)"); x.fillStyle = g; x.fillRect(-32, -32, 64, 64);
+    x.fillStyle = "rgba(255,255,255,.9)"; [0, Math.PI / 2].forEach(a => { x.save(); x.rotate(a); x.beginPath(); x.moveTo(-32, 0); x.lineTo(0, -1.6); x.lineTo(32, 0); x.lineTo(0, 1.6); x.fill(); x.restore(); }); }
+  if (kind === "ember" || kind === "snow") { const g = x.createRadialGradient(0, 0, 0, 0, 0, 30); g.addColorStop(0, "rgba(255,255,255,1)"); g.addColorStop(.25, "rgba(255,255,255,.7)"); g.addColorStop(1, "rgba(255,255,255,0)"); x.fillStyle = g; x.fillRect(-32, -32, 64, 64);
+    if (kind === "snow") { x.strokeStyle = "rgba(255,255,255,.8)"; x.lineWidth = 2; for (let a = 0; a < 6; a++) { x.beginPath(); x.moveTo(0, 0); x.lineTo(Math.cos(a * 1.047) * 18, Math.sin(a * 1.047) * 18); x.stroke(); } } }
+  if (kind === "leaf") { x.rotate(.6); x.fillStyle = "#fff"; x.beginPath(); x.moveTo(0, 26); [[8, 14], [16, 10], [10, 2], [18, -4], [9, -12], [12, -20], [0, -28]].forEach(([a, bb]) => x.quadraticCurveTo(a + 5, bb + 3, a, bb));
+    [[12, -20], [9, -12], [18, -4], [10, 2], [16, 10], [8, 14], [0, 26]].forEach(([a, bb]) => x.quadraticCurveTo(-a - 5, bb - 3, -a, bb)); x.fill(); x.strokeStyle = "rgba(0,0,0,.35)"; x.lineWidth = 1.5; x.beginPath(); x.moveTo(0, 26); x.lineTo(0, -26); x.stroke(); }
+  if (kind === "petal") { x.rotate(.4); const g = x.createRadialGradient(0, 8, 2, 0, 0, 26); g.addColorStop(0, "#fff"); g.addColorStop(1, "rgba(255,255,255,.75)"); x.fillStyle = g; x.beginPath(); x.moveTo(0, 22); x.bezierCurveTo(24, 8, 18, -22, 0, -16); x.bezierCurveTo(-18, -22, -24, 8, 0, 22); x.fill(); }
+  if (kind === "rays") { /* fait à part */ }
+  return CANV["s-" + kind] = c;
+}
+function bgCanvas(rgb) {
+  const k = "bg-" + rgb.join(); if (CANV[k]) return CANV[k];
+  const [c, x] = cnv(512, 640), g = x.createRadialGradient(256, 250, 10, 256, 300, 460); const [r, gg, b] = rgb;
+  g.addColorStop(0, `rgb(${r},${gg},${b})`); g.addColorStop(.45, `rgb(${r * .35 | 0},${gg * .35 | 0},${b * .35 | 0})`); g.addColorStop(1, "rgb(6,3,3)"); x.fillStyle = g; x.fillRect(0, 0, 512, 640);
+  // une arche de crypte à peine visible
+  x.strokeStyle = `rgba(${r * 2.5 | 0},${gg * 2.5 | 0},${b * 2.5 | 0},.10)`; x.lineWidth = 3; x.beginPath(); x.moveTo(60, 640); x.lineTo(60, 260); x.arc(256, 260, 196, Math.PI, 0); x.lineTo(452, 640); x.stroke();
+  x.lineWidth = 1.5; x.beginPath(); x.moveTo(76, 640); x.lineTo(76, 262); x.arc(256, 262, 180, Math.PI, 0); x.lineTo(436, 640); x.stroke();
+  return CANV[k] = c;
+}
+function raysCanvas(rgb) {
+  const [c, x] = cnv(1024, 1024); x.translate(512, 512); const [r, g, b] = rgb;
+  for (let k = 0; k < 36; k++) { x.rotate(Math.PI * 2 / 36); const gr = x.createLinearGradient(0, 0, 0, -512); gr.addColorStop(0, `rgba(${r},${g},${b},.7)`); gr.addColorStop(1, `rgba(${r},${g},${b},0)`); x.fillStyle = gr;
+    x.beginPath(); x.moveTo(0, 0); x.lineTo(-22 - (k % 3) * 10, -512); x.lineTo(22 + (k % 3) * 10, -512); x.fill(); }
+  return c;
+}
+
+/* ================= environnement et matières ================= */
+function makeEnv(renderer, cold) {
+  const pm = new T.PMREMGenerator(renderer), sc = new T.Scene();
+  const g = new T.SphereGeometry(10, 48, 24), col = [], pos = g.attributes.position;
+  for (let i = 0; i < pos.count; i++) { const y = pos.getY(i) / 10; const t = Math.max(0, y);
+    cold ? col.push(.03 + .3 * t * t, .04 + .4 * t * t, .06 + .55 * t * t) : col.push(.05 + .55 * t * t, .03 + .32 * t * t, .02 + .16 * t * t); }
+  g.setAttribute("color", new T.Float32BufferAttribute(col, 3));
+  sc.add(new T.Mesh(g, new T.MeshBasicMaterial({ side: T.BackSide, vertexColors: true })));
+  const panel = (w, h, x, y, z, r, gg, b) => { const m = new T.Mesh(new T.PlaneGeometry(w, h), new T.MeshBasicMaterial({ side: T.DoubleSide })); m.material.color.setRGB(r, gg, b); m.position.set(x, y, z); m.lookAt(0, 0, 0); sc.add(m); };
+  if (cold) { panel(4, 6, -7, 3, 4, 3.4, 4, 5.2); panel(3, 5, 7, 2, 3, 3.6, 3.8, 4.4); panel(1.2, 7, 4, 1, 7, 4, 4.4, 5); }
+  else { panel(4, 6, -7, 3, 4, 6, 3.6, 1.8); panel(3, 5, 7, 2, 3, 4, 2.4, 1.2); panel(1.2, 7, 4, 1, 7, 5, 3.6, 2.2); }
+  panel(8, 2, 0, 8, 0, 3, 2.4, 1.6); panel(2, 8, 0, 1, -8, 1.2, 1.5, 2.2); panel(10, 1, 0, -2, 7, 1.4, .8, .5);
+  for (let k = 0; k < 10; k++) { const a = k / 10 * Math.PI * 2; panel(.5, .5, Math.cos(a) * 8, 4 + (k % 3), Math.sin(a) * 8, 7, 6, 5); } // petites sources : éclats nets sur le métal
+  const t = pm.fromScene(sc, .02).texture; pm.dispose(); return t;
+}
+function fireTex() { if (!CANV.fire) { const [c, x] = cnv(4, 256), g = x.createLinearGradient(0, 256, 0, 0); g.addColorStop(0, "#000"); g.addColorStop(.3, "#3a0800"); g.addColorStop(.6, "#c02800"); g.addColorStop(.85, "#ff6a10"); g.addColorStop(1, "#ffc040"); x.fillStyle = g; x.fillRect(0, 0, 4, 256); CANV.fire = c; }
+  const t = tex(CANV.fire, true); t.wrapS = T.ClampToEdgeWrapping; return t; }
+function mats(kind, H) {
+  const std = (c, r, m = 1, extra = {}) => new T.MeshStandardMaterial(Object.assign({ color: c, roughness: r, metalness: m, envMapIntensity: 1.3 }, extra));
+  const phys = o => new T.MeshPhysicalMaterial(Object.assign({ envMapIntensity: 1.6 }, o));
+  const gemM = (c, e) => phys({ color: c, metalness: .05, roughness: .02, transmission: .4, clearcoat: 1, emissive: e, emissiveIntensity: 1, flatShading: true, reflectivity: 1 });
+  const M = {
+    gold: std(0xffc45e, .17), goldRough: std(0xd9a441, .38), goldDark: std(0xa8741c, .3),
+    copper: std(0xc8603a, .22), copperDark: std(0x9a4524, .38), patina: std(0x6f8a52, .55, .5), bark: std(0x5a2c14, .6, .6),
+    silver: std(0xeef1f6, .1), silverFrost: std(0xd6e2ee, .34),
+    ice: phys({ color: 0xc4e2ff, metalness: 0, roughness: .04, transmission: .75, ior: 1.31, clearcoat: 1, emissive: 0x0e3060, emissiveIntensity: .45, envMapIntensity: 1.3, transparent: true, opacity: .9, flatShading: true }),
+    snow: std(0x9fb2c8, .85, 0),
+    amber: gemM(0xff8a1a, 0x7a2a00), sapphire: gemM(0x2a5cff, 0x061a7a), ruby: gemM(0xe0101e, 0x6a0008),
+    rose: phys({ color: 0x8a0812, metalness: 0, roughness: .5, clearcoat: .5, clearcoatRoughness: .35, side: T.DoubleSide }),
+    roseDeep: phys({ color: 0x5a0410, metalness: 0, roughness: .4, clearcoat: .7, side: T.DoubleSide }),
+    enamel: phys({ color: 0x2c6a28, metalness: .2, roughness: .22, clearcoat: 1, side: T.DoubleSide }),
+    wheat: std(0xf0c060, .35), acorn: std(0x7a4a1c, .4, .5),
+    flame: std(0xff9a30, .22, 1, { emissive: 0xffffff, emissiveMap: fireTex(), emissiveIntensity: 1.6 }), flameTip: std(0xffd070, .18, 1, { emissive: 0xffffff, emissiveMap: fireTex(), emissiveIntensity: 1.2 })
+  };
+  // le corps ciselé
+  const e = engraving(kind, H), base = { automne: [0xc8603a, .24], hiver: [0xf0f3f8, .12], printemps: [0xffc45e, .16], ete: [0xffc85e, .15] }[kind];
+  M.body = std(base[0], base[1], 1, { map: tex(e.map, true), bumpMap: tex(e.bump), bumpScale: .028 });
+  const mc = marbleCanvases(); M.marble = new T.MeshStandardMaterial({ map: tex(mc.map, true), roughnessMap: tex(mc.mr), metalnessMap: tex(mc.mr), roughness: 1, metalness: 1, flatShading: true, envMapIntensity: 1.2 });
+  return M;
+}
+
+/* ================= géométrie ================= */
+// profil lissé (Catmull-Rom centripète), UV recalculées : la ciselure suit la hauteur, l'intérieur reste lisse
+function vessel(pts, mat, H, seg = 128) {
+  const curve = new T.CatmullRomCurve3(pts.map(p => V3(p[0], p[1], 0)), false, "centripetal");
+  const P = curve.getPoints(pts.length * 7).map(p => V2(Math.max(0, p.x), p.y));
+  let top = 0; P.forEach((p, i) => { if (p.y > P[top].y) top = i; });
+  const g = new T.LatheGeometry(P, seg), uv = g.attributes.uv, n = P.length;
+  for (let i = 0; i <= seg; i++) for (let j = 0; j < n; j++) uv.setY(i * n + j, j <= top ? Math.min(.992, P[j].y / H) : .997);
+  const mesh = new T.Mesh(g, mat);
+  const outer = P.slice(0, top + 1);
+  mesh.userData.rAt = y => { for (let k = outer.length - 1; k > 0; k--) { const a = outer[k - 1], b = outer[k]; if ((y - a.y) * (y - b.y) <= 0 && a.y !== b.y) return a.x + (b.x - a.x) * (y - a.y) / (b.y - a.y); } return outer[outer.length - 1].x; };
+  return mesh;
+}
+function lathe(points, mat, seg = 96) { return new T.Mesh(new T.LatheGeometry(points.map(p => V2(p[0], p[1])), seg), mat); }
+function ring(r, tube, y, mat, seg = 128, rad = 12) { const m = new T.Mesh(new T.TorusGeometry(r, tube, rad, seg), mat); m.rotation.x = Math.PI / 2; m.position.y = y; return m; }
+function beadRing(r, y, n, br, mat) { const g = new T.Group(), s = new T.SphereGeometry(br, 10, 8); for (let i = 0; i < n; i++) { const a = i / n * Math.PI * 2, m = new T.Mesh(s, mat); m.position.set(Math.sin(a) * r, y, Math.cos(a) * r); g.add(m); } return g; }
+function around(n, r, y, make, phase = 0) { const g = new T.Group(); for (let i = 0; i < n; i++) { const a = phase + i / n * Math.PI * 2, o = make(i, a); o.position.add(V3(Math.sin(a) * r, y, Math.cos(a) * r)); g.add(o); } return g; }
+// un tube dont l'épaisseur varie le long de la courbe (branches, ronces, flammes)
+function taper(pts, r0, r1, mat, seg = 80, rad = 12, wob = 0) {
+  const c = new T.CatmullRomCurve3(pts.map(p => V3(p[0], p[1], p[2])), false, "centripetal"); const g = new T.TubeGeometry(c, seg, 1, rad, false), pos = g.attributes.position;
+  const fr = c.computeFrenetFrames(seg, false);
+  for (let i = 0; i <= seg; i++) { const t = i / seg, P = c.getPointAt(t), r = r0 + (r1 - r0) * t;
+    for (let j = 0; j <= rad; j++) { const k = i * (rad + 1) + j, v = j / rad * Math.PI * 2, w = 1 + wob * Math.sin(t * 40 + j * 1.7) * Math.sin(t * 13);
+      const N = fr.normals[i], B = fr.binormals[i]; pos.setXYZ(k, P.x + r * w * (Math.cos(v) * N.x + Math.sin(v) * B.x), P.y + r * w * (Math.cos(v) * N.y + Math.sin(v) * B.y), P.z + r * w * (Math.cos(v) * N.z + Math.sin(v) * B.z)); } }
+  g.computeVertexNormals(); const m = new T.Mesh(g, mat); m.userData.curve = c; return m;
+}
+// pierre taillée en brillant
+function gemGeo(r) { return new T.LatheGeometry([V2(0, -r * .85), V2(r, -r * .05), V2(r, r * .05), V2(r * .62, r * .38), V2(0, r * .38)], 8); }
+function gem(r, mat) { return new T.Mesh(gemGeo(r), mat); }
+function bend(geo, k, axis = "x") { const p = geo.attributes.position; for (let i = 0; i < p.count; i++) { const a = axis === "x" ? p.getX(i) : p.getY(i); p.setZ(i, p.getZ(i) + k * a * a); } geo.computeVertexNormals(); return geo; }
+function oakLeafGeo(curl = 2) {
+  const s = new T.Shape(), L = [[.05, .06], [.11, .07], [.07, .13], [.13, .17], [.08, .22], [.11, .28], [.04, .3], [0, .36]];
+  s.moveTo(0, 0); L.forEach(([x, y]) => s.quadraticCurveTo(x + .03, y - .02, x, y)); for (let i = L.length - 2; i >= 0; i--) { const [x, y] = L[i]; s.quadraticCurveTo(-x - .03, y + .02, -x, y); } s.quadraticCurveTo(-.03, .02, 0, 0);
+  const g = new T.ExtrudeGeometry(s, { depth: .008, bevelEnabled: true, bevelThickness: .006, bevelSize: .005, bevelSegments: 2, curveSegments: 8 }); g.translate(0, 0, -.004);
+  const p = g.attributes.position; for (let i = 0; i < p.count; i++) { const x = p.getX(i), y = p.getY(i); p.setZ(i, p.getZ(i) - curl * x * x + .9 * (y - .18) * (y - .18)); } g.computeVertexNormals(); return g;
+}
+function leafGeo(w = .09, h = .26, curl = 3) { const s = new T.Shape(); s.moveTo(0, 0); s.quadraticCurveTo(w, h * .4, 0, h); s.quadraticCurveTo(-w, h * .4, 0, 0);
+  return bend(new T.ExtrudeGeometry(s, { depth: .006, bevelEnabled: true, bevelThickness: .005, bevelSize: .004, bevelSegments: 2, curveSegments: 10 }), -curl); }
+function flameGeo(h = .5, w = .14) {
+  const s = new T.Shape(); s.moveTo(0, 0); s.bezierCurveTo(w * 1.4, h * .2, w * .4, h * .55, w * .25, h * .75); s.bezierCurveTo(w * .5, h * .8, w * .2, h * .95, 0, h);
+  s.bezierCurveTo(-w * .4, h * .8, -w * .9, h * .6, -w * .5, h * .45); s.bezierCurveTo(-w * .7, h * .35, -w * 1.3, h * .15, 0, 0);
+  const g = bend(new T.ExtrudeGeometry(s, { depth: .02, bevelEnabled: true, bevelThickness: .025, bevelSize: .02, bevelSegments: 4, curveSegments: 14 }), -1.6);
+  const uv = g.attributes.uv; for (let i = 0; i < uv.count; i++) uv.setXY(i, .5, Math.min(1, Math.max(0, uv.getY(i) / h))); return g;
+}
+function onSurface(o, a, r, y, tiltX = 0, roll = 0) { o.position.set(Math.sin(a) * r, y, Math.cos(a) * r); o.rotation.set(0, a, 0); o.rotateX(tiltX); o.rotateZ(roll); return o; }
+// liquide lumineux à l'intérieur de la coupe
+function liquid(r, y, inner, outer, power) {
+  const [c, x] = cnv(256, 256), g = x.createRadialGradient(128, 128, 0, 128, 128, 128); g.addColorStop(0, inner); g.addColorStop(.75, outer); g.addColorStop(1, "#000"); x.fillStyle = g; x.fillRect(0, 0, 256, 256);
+  for (let k = 0; k < 6; k++) { x.strokeStyle = "rgba(255,255,255,.07)"; x.lineWidth = 2; x.beginPath(); x.arc(128, 128, 20 + k * 17, 0, 7); x.stroke(); }
+  const m = new T.MeshBasicMaterial({ map: tex(c, true) }); m.color.setScalar(power);
+  const d = new T.Mesh(new T.CircleGeometry(r, 64), m); d.rotation.x = -Math.PI / 2; d.position.y = y; d.userData.liquid = true; return d;
+}
+function rimGlints(c, r, y, n) { for (let i = 0; i < n; i++) { const a = i / n * Math.PI * 2 + .3; c.userData.glints.push([V3(Math.sin(a) * r, y, Math.cos(a) * r), 1]); } }
+
+function plinth(label, M, trim) {
+  const g = new T.Group();
+  const base = lathe([[0, 0], [1.46, 0], [1.5, .03], [1.5, .3], [1.44, .34], [1.3, .36], [1.2, .38], [1.17, .42], [1.17, .56], [1.12, .6], [0, .6]], M.marble, 8);
+  base.rotation.y = Math.PI / 8; g.add(base);
+  [[1.47, .32, .022], [1.19, .58, .02], [1.5, .015, .02]].forEach(([r, y, t]) => { const m = ring(r, t, y, trim, 8, 6); m.rotation.z = Math.PI / 8; g.add(m); });
+  // petites pattes d'or aux huit coins
+  for (let k = 0; k < 8; k++) { const a = k / 8 * Math.PI * 2, f = new T.Mesh(new T.SphereGeometry(.07, 16, 10), trim); f.scale.set(1, .6, 1); f.position.set(Math.sin(a) * 1.46, .03, Math.cos(a) * 1.46); g.add(f); }
+  const [cv, x] = cnv(512, 112), gr = x.createLinearGradient(0, 0, 0, 112); gr.addColorStop(0, "#fff0c0"); gr.addColorStop(.5, "#d8a840"); gr.addColorStop(1, "#7a5214"); x.fillStyle = gr; x.fillRect(0, 0, 512, 112);
+  x.strokeStyle = "#5a3a0a"; x.lineWidth = 5; x.strokeRect(8, 8, 496, 96); x.strokeRect(16, 16, 480, 80);
+  x.fillStyle = "#3a2204"; x.font = '60px "Pirata One", Georgia, serif'; x.textAlign = "center"; x.textBaseline = "middle"; x.fillText(PLATE || label, 256, 60);
+  const plate = new T.Mesh(new T.PlaneGeometry(.98, .2), new T.MeshStandardMaterial({ map: tex(cv, true), metalness: .9, roughness: .28, envMapIntensity: 1.3 }));
+  plate.position.set(0, .165, 1.5 * Math.cos(Math.PI / 8) + .004); g.add(plate);
+  return g;
+}
+
+/* ================= les quatre coupes ================= */
+function cupAutomne() {
+  const H = 2.15, M = mats("automne", H), g = new T.Group(); g.add(plinth("Automne 2026", M, M.goldDark));
+  const c = new T.Group(); c.position.y = .6; c.userData.glints = []; g.add(c);
+  const body = vessel([[0, 0], [.86, 0], [.88, .05], [.8, .1], [.56, .14], [.42, .22], [.24, .34], [.17, .48], [.2, .54], [.32, .6], [.2, .68], [.15, .82], [.18, .94], [.36, 1.02], [.72, 1.18], [.96, 1.46], [1.06, 1.8], [1.1, 2.06], [1.14, 2.12], [1.1, 2.15], [1.02, 2.06], [.96, 1.7], [.82, 1.36], [.5, 1.12], [0, 1.08]], M.body, H);
+  c.add(body); const rAt = body.userData.rAt;
+  c.add(ring(.33, .035, .6, M.goldRough)); c.add(beadRing(.3, .66, 22, .022, M.goldRough)); c.add(ring(.87, .025, .05, M.goldRough)); c.add(ring(1.125, .032, 2.12, M.gold));
+  c.add(around(6, .345, .6, (i, a) => { const m = gem(.06, M.amber); m.rotation.set(Math.PI / 2, 0, 0); m.lookAt(Math.sin(a) * 9, .6, Math.cos(a) * 9); m.rotateX(Math.PI / 2); return m; }));
+  // racines qui enserrent le pied
+  for (let k = 0; k < 7; k++) { const a = k / 7 * Math.PI * 2 + .2, sa = Math.sin(a), ca = Math.cos(a), b = a + .5;
+    c.add(taper([[sa * .17, .9, ca * .17], [sa * .2, .7, ca * .2], [Math.sin(a + .2) * .3, .4, Math.cos(a + .2) * .3], [Math.sin(b) * .6, .16, Math.cos(b) * .6], [Math.sin(b + .2) * .84, .07, Math.cos(b + .2) * .84], [Math.sin(b + .25) * .98, .02, Math.cos(b + .25) * .98]], .05, .012, M.bark, 60, 8, .25)); }
+  // couronne de feuilles de chêne sur deux rangs, sous la lèvre
+  const lg = oakLeafGeo(), lm = [M.gold, M.goldRough, M.copperDark, M.patina];
+  for (let i = 0; i < 22; i++) { const a = i / 22 * Math.PI * 2, y = 1.93 + (i % 2) * .05, m = new T.Mesh(lg, lm[i % 4]); m.scale.setScalar(.95 + (i % 3) * .1);
+    onSurface(m, a, rAt(y) + .025, y - .14, -.35, (i % 2 ? .9 : -.9) + (rnd() - .5) * .3); c.add(m); }
+  for (let i = 0; i < 11; i++) { const a = (i + .5) / 11 * Math.PI * 2, y = 1.86, ac = new T.Group();
+    [[0, 0], [.07, -.03]].forEach(([dx, dy]) => { const nut = new T.Mesh(new T.SphereGeometry(.05, 18, 14), M.acorn); nut.scale.set(1, 1.35, 1); nut.position.set(dx, dy, 0); ac.add(nut);
+      const cap = new T.Mesh(new T.SphereGeometry(.055, 18, 8, 0, Math.PI * 2, 0, Math.PI / 2), M.goldDark); cap.position.set(dx, dy + .025, 0); ac.add(cap); });
+    onSurface(ac, a, rAt(y) + .05, y); c.add(ac); }
+  // deux gerbes de blé croisées sur la face et au dos
+  const ear = () => { const e = new T.Group(); e.add(taper([[0, -.35, 0], [0, 0, .01], [0, .1, .015]], .012, .008, M.wheat, 16, 6)); const gr = new T.SphereGeometry(.024, 10, 8);
+    for (let k = 0; k < 14; k++) { const m = new T.Mesh(gr, M.wheat); m.scale.set(.75, 1.6, .75); const s = k % 2 ? 1 : -1; m.position.set(s * .02, .1 + k * .022, .01); m.rotation.z = -s * .35; e.add(m);
+      const aw = new T.Mesh(new T.CylinderGeometry(.002, .002, .12, 3), M.goldRough); aw.position.set(s * .05, .15 + k * .022, .01); aw.rotation.z = -s * .5; e.add(aw); } return e; };
+  [0, Math.PI].forEach(a => { const sh = new T.Group(); [-.42, -.15, .15, .42].forEach((r, k) => { const e = ear(); e.rotation.z = r; e.position.x = Math.sin(r) * .1; sh.add(e); });
+    const knot = ring(.04, .02, -.18, M.gold, 24); knot.rotation.set(0, 0, 0); sh.add(knot); const amb = gem(.065, M.amber); amb.rotation.x = Math.PI / 2; amb.position.set(0, -.18, .04); sh.add(amb);
+    sh.scale.setScalar(1.5); onSurface(sh, a, rAt(1.5) + .06, 1.5, -.28); c.add(sh); c.userData.glints.push([V3(Math.sin(a) * (rAt(1.32) + .12), 1.32, Math.cos(a) * (rAt(1.32) + .12)), 1.4]); });
+  // anses : branches noueuses avec feuilles et glands
+  [1, -1].forEach(s => { const br = taper([[s * 1.02, 1.95, 0], [s * 1.4, 2.04, .03], [s * 1.7, 1.78, 0], [s * 1.62, 1.4, -.03], [s * 1.3, 1.2, 0], [s * .88, 1.24, 0]], .07, .045, M.bark, 90, 10, .2); c.add(br);
+    c.add(taper([[s * 1.62, 1.44, 0], [s * 1.8, 1.32, .05], [s * 1.9, 1.2, .03]], .028, .01, M.bark, 20, 8));
+    [[1.66, 1.86, .3, 0], [1.74, 1.6, 1.6, .05], [1.5, 1.27, 2.4, 0], [1.9, 1.2, 2.9, 0], [1.4, 2.06, -.6, 0]].forEach(([x, y, r]) => { const lf = new T.Mesh(lg, M.gold); lf.scale.setScalar(.75); lf.position.set(s * x, y, .05); lf.rotation.set(.2, s > 0 ? 0 : Math.PI, s * r); c.add(lf); }); });
+  c.add(liquid(.97, 2.0, "#ffd070", "#b04a08", 2.2)); rimGlints(c, 1.13, 2.13, 6);
+  return { g, c, H };
+}
+function snowflake(M) {
+  const g = new T.Group(), arm = new T.BoxGeometry(.022, .3, .014), br = new T.BoxGeometry(.014, .1, .012);
+  for (let i = 0; i < 6; i++) { const a = new T.Group(); a.rotation.z = i * Math.PI / 3; const m = new T.Mesh(arm, M.silver); m.position.y = .15; a.add(m);
+    [.1, .2].forEach(y => [1, -1].forEach(s => { const b = new T.Mesh(br, M.silver); b.position.set(s * .03, y, 0); b.rotation.z = s * -.9; a.add(b); }));
+    const tip = new T.Mesh(gemGeo(.025), M.ice); tip.position.y = .31; a.add(tip); g.add(a); }
+  const sp = gem(.06, M.sapphire); sp.rotation.x = Math.PI / 2; g.add(sp); return g;
+}
+function crystal(h, r, M) { const g = new T.Group(); const body = new T.Mesh(new T.CylinderGeometry(r, r * 1.1, h, 6, 1), M.ice); body.position.y = h / 2; g.add(body);
+  const tip = new T.Mesh(new T.ConeGeometry(r, r * 2.4, 6), M.ice); tip.position.y = h + r * 1.2; g.add(tip); return g; }
+function cupHiver() {
+  const H = 2.38, M = mats("hiver", H), g = new T.Group(); g.add(plinth("Hiver 2026-27", M, M.silver));
+  const c = new T.Group(); c.position.y = .6; c.userData.glints = []; g.add(c);
+  const body = vessel([[0, 0], [.72, 0], [.74, .05], [.6, .1], [.36, .16], [.2, .26], [.12, .44], [.1, .9], [.12, 1.1], [.22, 1.16], [.12, 1.22], [.14, 1.34], [.34, 1.44], [.6, 1.62], [.74, 1.9], [.78, 2.22], [.84, 2.36], [.8, 2.38], [.72, 2.24], [.68, 1.92], [.54, 1.66], [.3, 1.5], [0, 1.46]], M.body, H);
+  c.add(body); const rAt = body.userData.rAt;
+  c.add(ring(.22, .022, 1.16, M.silverFrost)); c.add(ring(.82, .022, 2.37, M.silver)); c.add(ring(.73, .02, .04, M.silverFrost));
+  c.add(around(10, .62, .1, (i, a) => { const m = gem(.045, M.sapphire); m.lookAt(Math.sin(a) * 9, 3, Math.cos(a) * 9); m.rotateX(Math.PI / 2); return m; }, .2));
+  c.add(around(6, .225, 1.16, () => gem(.04, M.sapphire)));
+  // fils d'argent enroulés sur la tige
+  [0, Math.PI].forEach(o => { const p = []; for (let t = 0; t <= 1; t += .02) { const a = o + t * Math.PI * 6, y = .3 + t * .8, r = (y < .44 ? .2 - (y - .3) * .5 : .118) + .012; p.push([Math.sin(a) * r, y, Math.cos(a) * r]); } c.add(taper(p, .014, .014, M.silver, 160, 6)); });
+  // couronne de prismes de glace
+  for (let i = 0; i < 13; i++) { const a = i / 13 * Math.PI * 2, h = .4 + .5 * ((i * 7) % 5) / 4, cr = crystal(h, .07 + .02 * (i % 3), M); cr.position.set(Math.sin(a) * .8, 2.3, Math.cos(a) * .8); cr.rotation.set(Math.cos(a) * .35, 0, -Math.sin(a) * .35); c.add(cr);
+    c.userData.glints.push([V3(Math.sin(a) * (.8 + h * .4), 2.3 + h + .1, Math.cos(a) * (.8 + h * .4)), 1.2]); }
+  for (let i = 0; i < 8; i++) { const a = (i + .5) / 8 * Math.PI * 2, cr = crystal(.6 + .3 * (i % 2), .06, M); cr.position.set(Math.sin(a) * .6, 2.15, Math.cos(a) * .6); cr.rotation.set(Math.cos(a) * .15, 0, -Math.sin(a) * .15); c.add(cr); }
+  const big = crystal(1.0, .11, M); big.position.y = 2.0; c.add(big); c.userData.glints.push([V3(0, 3.3, 0), 1.6]);
+  // stalactites sous la lèvre
+  for (let i = 0; i < 36; i++) { const a = i / 36 * Math.PI * 2, L = .08 + .22 * ((i * 5) % 7) / 6, m = new T.Mesh(new T.ConeGeometry(.018, L, 6), M.ice); m.rotation.x = Math.PI; m.position.set(Math.sin(a) * .835, 2.33 - L / 2, Math.cos(a) * .835); c.add(m); }
+  [0, Math.PI].forEach(a => { const f = snowflake(M); f.scale.setScalar(1.25); onSurface(f, a, rAt(1.92) + .03, 1.92, -.1); c.add(f); c.userData.glints.push([V3(Math.sin(a) * (rAt(1.92) + .1), 1.92, Math.cos(a) * (rAt(1.92) + .1)), 1.6]); });
+  // congère et givre sur le socle
+  for (let i = 0; i < 26; i++) { const a = rnd() * Math.PI * 2, r = .55 + rnd() * .5, cr = crystal(.1 + rnd() * .25, .025 + rnd() * .02, M); cr.position.set(Math.sin(a) * r, .6, Math.cos(a) * r); cr.rotation.set((rnd() - .5) * .9, 0, (rnd() - .5) * .9); g.add(cr); }
+  c.add(liquid(.7, 2.24, "#e8f6ff", "#3a7ac8", 1.9)); rimGlints(c, .82, 2.38, 5);
+  return { g, c, H };
+}
+function rose(s = 1) {
+  const M = window.__M, g = new T.Group();
+  for (let k = 0; k < 20; k++) { const layer = k / 19, r = .03 + layer * .07, th0 = Math.PI * (.3 + layer * .34);
+    const geo = new T.SphereGeometry(r, 16, 10, 0, 2.3 - layer * .7, th0, Math.PI - th0 - .05), m = new T.Mesh(geo, k < 6 ? M.roseDeep : M.rose);
+    m.rotation.y = k * 2.39996; m.position.y = r * .55; m.scale.y = 1.1 - layer * .35; g.add(m); }
+  g.scale.setScalar(s); return g;
+}
+function cupPrintemps() {
+  const H = 2.13, M = mats("printemps", H); window.__M = M; const g = new T.Group(); g.add(plinth("Printemps 2027", M, M.gold));
+  const c = new T.Group(); c.position.y = .6; c.userData.glints = []; g.add(c);
+  const body = vessel([[0, 0], [.8, 0], [.82, .05], [.7, .1], [.44, .16], [.26, .3], [.16, .52], [.2, .6], [.3, .66], [.18, .74], [.15, .9], [.3, 1.0], [.7, 1.12], [1.0, 1.34], [1.14, 1.62], [1.12, 1.9], [1.02, 2.06], [1.06, 2.12], [1.0, 2.13], [.94, 2.04], [1.02, 1.88], [1.04, 1.62], [.9, 1.36], [.6, 1.18], [0, 1.12]], M.body, H);
+  c.add(body); const rAt = body.userData.rAt;
+  c.add(ring(.31, .032, .66, M.goldDark)); c.add(ring(1.04, .025, 2.12, M.gold));
+  c.add(around(8, .315, .66, (i, a) => { const m = gem(.04, M.ruby); m.lookAt(Math.sin(a) * 9, .66, Math.cos(a) * 9); m.rotateX(Math.PI / 2); return m; }, .3));
+  // lèvre en pétales d'or
+  const pg = leafGeo(.07, .16, 4); for (let i = 0; i < 26; i++) { const a = i / 26 * Math.PI * 2, m = new T.Mesh(pg, i % 2 ? M.gold : M.goldRough); onSurface(m, a, 1.04, 2.07, .35); c.add(m); }
+  // ronce à épines qui grimpe autour du pied
+  const vine = []; for (let t = 0; t <= 1; t += .02) { const a = t * Math.PI * 5, r = .2 + .06 * Math.sin(t * 9) + (t > .7 ? (t - .7) * 2.4 : 0); vine.push([Math.sin(a) * r, .12 + t * 1.1, Math.cos(a) * r]); }
+  const vm = taper(vine, .045, .025, M.enamel, 220, 8); c.add(vm); const thorn = new T.ConeGeometry(.016, .085, 6);
+  for (let i = 1; i < 44; i++) { const t = i / 44, p = vm.userData.curve.getPointAt(t), out = V3(p.x, 0, p.z).normalize(), m = new T.Mesh(thorn, M.goldDark);
+    m.position.copy(p).addScaledVector(out, .03); m.quaternion.setFromUnitVectors(V3(0, 1, 0), out.clone().add(V3(0, .4 * (i % 2 ? 1 : -1), 0)).normalize()); c.add(m); }
+  // guirlande de roses autour de la panse, avec feuilles d'émail
+  const lgeo = leafGeo(.075, .2, 5);
+  for (let i = 0; i < 9; i++) { const a = i / 9 * Math.PI * 2, y = 1.62 + (i % 2 ? -.04 : .04), s = i % 3 === 0 ? 2.5 : 2.0, rad = rAt(y) + .02, ro = rose(s);
+    ro.position.set(Math.sin(a) * rad, y, Math.cos(a) * rad); ro.lookAt(Math.sin(a) * 9, y + 1.2, Math.cos(a) * 9); ro.rotateX(Math.PI / 2); c.add(ro);
+    [-1, 1].forEach(k => { const lf = new T.Mesh(lgeo, M.enamel); onSurface(lf, a + k * .19, rAt(y - .1) + .02, y - .12, -.5, k * 1.2); c.add(lf); }); }
+  // festons de ronce entre les roses
+  for (let i = 0; i < 9; i++) { const a0 = i / 9 * Math.PI * 2, a1 = (i + 1) / 9 * Math.PI * 2, p = [];
+    for (let t = 0; t <= 1; t += .1) { const a = a0 + (a1 - a0) * t, y = 1.62 - Math.sin(t * Math.PI) * .2, r = rAt(y) + .03; p.push([Math.sin(a) * r, y, Math.cos(a) * r]); } c.add(taper(p, .016, .016, M.enamel, 30, 6)); }
+  const rb = gem(.1, M.ruby); onSurface(rb, 0, rAt(1.3) + .02, 1.3, Math.PI / 2 - .5); c.add(rb); c.userData.glints.push([V3(0, 1.32, rAt(1.3) + .12), 1.5]);
+  // anses en ronce d'or
+  [1, -1].forEach(s => { c.add(taper([[s * 1.08, 1.85, 0], [s * 1.5, 1.94, .05], [s * 1.64, 1.55, 0], [s * 1.4, 1.22, -.05], [s * .95, 1.3, 0]], .05, .03, M.goldRough, 80, 10));
+    const r2 = rose(.9); r2.position.set(s * 1.6, 1.78, 0); r2.rotation.z = -s * Math.PI / 2; c.add(r2); });
+  c.add(liquid(.95, 2.0, "#ff6a7a", "#5a0010", 1.6)); rimGlints(c, 1.05, 2.13, 6);
+  return { g, c, H };
+}
+function cupEte() {
+  const H = 2.22, M = mats("ete", H), g = new T.Group(); g.add(plinth("Été 2027", M, M.gold));
+  const c = new T.Group(); c.position.y = .6; c.userData.glints = []; g.add(c);
+  const body = vessel([[0, 0], [.9, 0], [.92, .06], [.78, .12], [.5, .18], [.3, .3], [.22, .44], [.34, .52], [.22, .6], [.2, .74], [.26, .86], [.5, .98], [.8, 1.2], [.9, 1.5], [.82, 1.8], [.86, 1.96], [1.08, 2.1], [1.24, 2.18], [1.2, 2.22], [1.02, 2.14], [.8, 2.0], [.76, 1.8], [.82, 1.5], [.72, 1.22], [.4, 1.04], [0, 1.0]], M.body, H);
+  c.add(body); const rAt = body.userData.rAt;
+  c.add(ring(.35, .038, .52, M.goldDark)); c.add(ring(1.22, .03, 2.2, M.gold)); c.add(beadRing(.92, .06, 48, .02, M.goldRough));
+  c.add(around(10, .37, .52, (i, a) => { const m = gem(.04, M.ruby); m.lookAt(Math.sin(a) * 9, .52, Math.cos(a) * 9); m.rotateX(Math.PI / 2); return m; }, .1));
+  // couronne de flammes incandescentes
+  const fl = flameGeo(.6, .16), fs = flameGeo(.38, .11);
+  for (let i = 0; i < 16; i++) { const a = i / 16 * Math.PI * 2, big = i % 2 === 0, m = new T.Mesh(big ? fl : fs, big ? M.flame : M.flameTip); m.position.set(Math.sin(a) * 1.16, 2.16, Math.cos(a) * 1.16); m.rotation.y = a; m.rotateX(-.3); m.rotateZ((i % 4 - 1.5) * .12); c.add(m);
+    if (big) c.userData.glints.push([V3(Math.sin(a) * 1.3, 2.75, Math.cos(a) * 1.3), .9]); }
+  // grand soleil sur la face et au dos
+  [0, Math.PI].forEach(a => { const sun = new T.Group(); const disc = new T.Mesh(new T.CylinderGeometry(.22, .22, .05, 64), M.gold); disc.rotation.x = Math.PI / 2; sun.add(disc);
+    sun.add(Object.assign(new T.Mesh(new T.TorusGeometry(.22, .018, 8, 64), M.goldDark), {}));
+    const ray = flameGeo(.3, .07); for (let k = 0; k < 16; k++) { const m = new T.Mesh(ray, k % 2 ? M.goldDark : M.gold), b = k / 16 * Math.PI * 2, L = .2; m.position.set(Math.cos(b) * L, Math.sin(b) * L, 0); m.rotation.z = b - Math.PI / 2; m.scale.setScalar(k % 2 ? .75 : 1.1); sun.add(m); }
+    const rb = gem(.1, M.ruby); rb.rotation.x = Math.PI / 2; rb.position.z = .04; sun.add(rb); onSurface(sun, a, rAt(1.5) + .02, 1.5, -.05); c.add(sun);
+    c.userData.glints.push([V3(Math.sin(a) * (rAt(1.5) + .1), 1.5, Math.cos(a) * (rAt(1.5) + .1)), 1.7]); });
+  // anses en volutes de feu
+  [1, -1].forEach(s => { c.add(taper([[s * .86, 1.88, 0], [s * 1.25, 1.96, 0], [s * 1.52, 1.7, 0], [s * 1.44, 1.38, 0], [s * 1.18, 1.3, 0], [s * 1.1, 1.48, 0], [s * 1.24, 1.56, 0]], .065, .03, M.gold, 90, 12));
+    const f = new T.Mesh(fl, M.flame); f.position.set(s * 1.52, 1.95, 0); f.scale.setScalar(.75); f.rotation.z = -s * .5; c.add(f); const r = gem(.05, M.ruby); r.rotation.x = Math.PI / 2; r.position.set(s * 1.24, 1.56, .04); c.add(r); });
+  c.add(liquid(.86, 2.06, "#fff2b0", "#e05a00", 2.8)); rimGlints(c, 1.22, 2.22, 6);
+  return { g, c, H };
+}
+const BUILD = { automne: cupAutomne, hiver: cupHiver, printemps: cupPrintemps, ete: cupEte };
+const PART = { automne: ["leaf", 46, -1, false, [[1, .45, .1], [.9, .2, .05], [1, .7, .2], [.6, .3, .1]], .2], hiver: ["snow", 110, -1, true, [[1.6, 1.8, 2.2]], .1],
+  printemps: ["petal", 50, -1, false, [[1, .45, .55], [.95, .25, .35], [1, .7, .75]], .16], ete: ["ember", 90, 1, true, [[3, 1.4, .4], [3, .9, .2], [2.4, 1.8, .6]], .07] };
+
+/* ================= la scène ================= */
+const POST = !!(T && T.EffectComposer && T.UnrealBloomPass && T.ShaderPass && T.RenderPass);
+const Finish = { uniforms: { tDiffuse: { value: null }, exposure: { value: 1.05 }, vig: { value: .55 }, time: { value: 0 } }, vertexShader: "varying vec2 vUv; void main(){ vUv = uv; gl_Position = projectionMatrix * modelViewMatrix * vec4(position, 1.0); }",
+  fragmentShader: `uniform sampler2D tDiffuse; uniform float exposure, vig, time; varying vec2 vUv;
+  vec3 aces(vec3 x){ return clamp((x*(2.51*x+0.03))/(x*(2.43*x+0.59)+0.14), 0.0, 1.0); }
+  void main(){ vec3 c = texture2D(tDiffuse, vUv).rgb * exposure; c = aces(c); c = pow(c, vec3(1.0/2.2));
+    vec2 d = vUv - vec2(.5, .48); c *= 1.0 - vig * smoothstep(.25, .85, length(d * vec2(1.0, 1.15)));
+    float n = fract(sin(dot(vUv * 1000.0 + time, vec2(12.9898, 78.233))) * 43758.5453); c += (n - .5) * .018; gl_FragColor = vec4(c, 1.0); }` };
+function makeStage(canvas, idx, opts = {}) {
+  const C = CUPS[idx], id = C.id;
+  const renderer = new T.WebGLRenderer({ canvas, antialias: !POST, powerPreference: "high-performance" });
+  const pr = Math.min(opts.pr || 1.75, window.devicePixelRatio || 1); renderer.setPixelRatio(pr);
+  renderer.shadowMap.enabled = true; renderer.shadowMap.type = T.PCFSoftShadowMap;
+  if (!POST) { renderer.outputEncoding = T.sRGBEncoding; renderer.toneMapping = T.ACESFilmicToneMapping; renderer.toneMappingExposure = 1.05; }
+  const scene = new T.Scene(); scene.environment = makeEnv(renderer, id === "hiver");
+  const bgt = tex(bgCanvas(C.bg), true); bgt.wrapS = T.ClampToEdgeWrapping; scene.background = bgt;
+  const cam = new T.PerspectiveCamera(opts.fov || 27, 1, .1, 100);
+  PLATE = opts.label || null; const { g: cup, c: body, H } = BUILD[id](); PLATE = null; scene.add(cup);
+  cup.traverse(o => { if (o.isMesh && !o.userData.liquid) { o.castShadow = true; o.receiveShadow = true; } });
+  // lumières : une douche de lumière chaude par le haut (ombres), une bougie qui vacille, un contre-jour froid
+  const spot = new T.SpotLight(id === "hiver" ? 0xc8dcff : 0xffd6a0, id === "hiver" ? 1.6 : 2.4, 30, .42, .7, 1.2); spot.position.set(1.4, 9.5, 3.4); spot.target.position.set(0, 1.4, 0); scene.add(spot, spot.target);
+  spot.castShadow = true; spot.shadow.mapSize.set(1024, 1024); spot.shadow.bias = -.0004; spot.shadow.camera.near = 4; spot.shadow.camera.far = 16;
+  const key = new T.PointLight(0xffb070, 1.1, 20); key.position.set(-3.5, 3.5, 4); scene.add(key);
+  const rim = new T.PointLight(id === "hiver" ? 0x9ac8ff : 0x9ab8ff, .9, 20); rim.position.set(3, 3.5, -4); scene.add(rim);
+  const inner = new T.PointLight(new T.Color().setRGB(...PART[id][4][0].map(v => Math.min(1, v))), .9, 3); inner.position.set(0, 3.0, 0); scene.add(inner);
+  scene.add(new T.AmbientLight(0x2a1810, .35));
+  // faisceau de lumière poussiéreux qui tombe sur la coupe
+  const [bc, bx] = cnv(4, 128), bg = bx.createLinearGradient(0, 0, 0, 128); bg.addColorStop(0, "rgba(0,0,0,1)"); bg.addColorStop(.25, `rgb(${C.rc})`); bg.addColorStop(1, "#000"); bx.fillStyle = bg; bx.fillRect(0, 0, 4, 128);
+  const beam = new T.Mesh(new T.CylinderGeometry(.5, 2.3, 9, 48, 1, true), new T.MeshBasicMaterial({ map: tex(bc, true), transparent: true, opacity: .07, blending: T.AdditiveBlending, depthWrite: false, side: T.DoubleSide }));
+  beam.position.set(.5, 6.0, 1.0); beam.rotation.z = -.12; beam.rotation.x = .2; scene.add(beam);
+  // halo au sol
+  const [hc, hx] = cnv(128, 128), rg = hx.createRadialGradient(64, 64, 0, 64, 64, 64); rg.addColorStop(0, `rgba(${C.rc},.45)`); rg.addColorStop(1, `rgba(${C.rc},0)`); hx.fillStyle = rg; hx.fillRect(0, 0, 128, 128);
+  const halo = new T.Mesh(new T.PlaneGeometry(5, 5), new T.MeshBasicMaterial({ map: tex(hc, true), transparent: true, depthWrite: false, blending: T.AdditiveBlending })); halo.rotation.x = -Math.PI / 2; halo.position.y = .004; scene.add(halo);
+  // éclats d'étoile qui scintillent sur le métal et les pierres
+  const gm = new T.SpriteMaterial({ map: tex(sprite("glint"), true), blending: T.AdditiveBlending, depthWrite: false, transparent: true }); gm.color.setScalar(2.2);
+  const glints = body.userData.glints.map(([p, s], k) => { const sp = new T.Sprite(gm.clone()); sp.position.copy(p); sp.userData = { s: s * .3, ph: k * 1.618, sp: .5 + (k % 5) * .17 }; body.add(sp); return sp; });
+  // particules de la saison
+  const [pk, N0, dir, add, cols, psz] = PART[id], N = Math.round(N0 * (opts.parts || 1)), pos = new Float32Array(N * 3), col = new Float32Array(N * 3), pv = [];
+  for (let i = 0; i < N; i++) { const a = rnd() * Math.PI * 2, r = .9 + rnd() * 2.6; pos.set([Math.sin(a) * r, rnd() * 7 - .5, Math.cos(a) * r - .4], i * 3); col.set(cols[i % cols.length], i * 3); pv.push([.004 + rnd() * .008, rnd() * 6, .3 + rnd() * .7]); }
+  const pgeo = new T.BufferGeometry(); pgeo.setAttribute("position", new T.BufferAttribute(pos, 3)); pgeo.setAttribute("color", new T.BufferAttribute(col, 3));
+  const pts = new T.Points(pgeo, new T.PointsMaterial({ size: psz, map: tex(sprite(pk), true), vertexColors: true, transparent: true, depthWrite: false, blending: add ? T.AdditiveBlending : T.NormalBlending, alphaTest: add ? 0 : .3, sizeAttenuation: true }));
+  scene.add(pts);
+  let rays = null; if (opts.rays) { rays = new T.Mesh(new T.PlaneGeometry(16, 16), new T.MeshBasicMaterial({ map: tex(raysCanvas(C.rc.split(",").map(Number)), true), transparent: true, opacity: 0, blending: T.AdditiveBlending, depthWrite: false })); rays.position.set(0, 2.4, -4); scene.add(rays); }
+
+  let composer = null, finish = null, bloom = null;
+  if (POST) { try {
+    const gl2 = renderer.capabilities.isWebGL2, RT = gl2 && T.WebGLMultisampleRenderTarget ? T.WebGLMultisampleRenderTarget : T.WebGLRenderTarget;
+    const rt = new RT(4, 4, { minFilter: T.LinearFilter, magFilter: T.LinearFilter, format: T.RGBAFormat, type: gl2 ? T.HalfFloatType : T.UnsignedByteType });
+    composer = new T.EffectComposer(renderer, rt); composer.addPass(new T.RenderPass(scene, cam));
+    bloom = new T.UnrealBloomPass(V2(256, 256), (opts.bloom || .5) * (id === "hiver" ? .6 : 1), .5, .9); composer.addPass(bloom);
+    finish = new T.ShaderPass(Finish); composer.addPass(finish);
+  } catch (e) { composer = null; renderer.outputEncoding = T.sRGBEncoding; renderer.toneMapping = T.ACESFilmicToneMapping; } }
+
+  const st = { renderer, scene, cam, cup, body, key, spot, rays, rot: opts.startRot || .4, vel: 0, drag: null, running: false, t0: performance.now() };
+  function size() { const w = canvas.clientWidth, h = canvas.clientHeight; if (!w || !h) return; renderer.setSize(w, h, false); cam.aspect = w / h;
+    const fit = opts.fit || 1, d = (cam.aspect < .62 ? 15.2 : cam.aspect < .9 ? 12.6 : 11.4) * fit; cam.position.set(0, 3.9, d); cam.lookAt(0, opts.lookY || 1.95, 0); cam.updateProjectionMatrix();
+    if (composer) { composer.setPixelRatio(pr); composer.setSize(w, h); bloom.resolution.set(w * pr / 2, h * pr / 2); } }
+  size(); st.size = size;
+  const wp = V3(0, 0, 0);
+  st.frame = now => { const t = (now - st.t0) / 1000;
+    if (!st.drag) { st.rot += .0035 + st.vel; st.vel *= .94; }
+    cup.rotation.y = st.rot;
+    key.intensity = 1.05 + Math.sin(t * 7.3) * .07 + Math.sin(t * 13.1) * .05; inner.intensity = .8 + Math.sin(t * 2.1) * .15;
+    glints.forEach(s => { s.getWorldPosition(wp); const face = Math.max(0, Math.min(1, (wp.z + .2) * 1.5)); const u = s.userData, k = Math.pow(Math.max(0, Math.sin(t * u.sp + u.ph)), 14) * face;
+      s.material.opacity = k; s.scale.setScalar(u.s * (.4 + k)); s.material.rotation = t * .3 + u.ph; });
+    const P = pgeo.attributes.position.array;
+    for (let i = 0; i < N; i++) { const v = pv[i]; v[1] += .02; P[i * 3 + 1] += dir * v[0] * (opts.rays ? 1.4 : 1); P[i * 3] += Math.sin(v[1]) * .004 * v[2]; P[i * 3 + 2] += Math.cos(v[1] * .7) * .003;
+      if (dir < 0 && P[i * 3 + 1] < -.3) P[i * 3 + 1] = 6.5; if (dir > 0 && P[i * 3 + 1] > 6.5) P[i * 3 + 1] = .2; }
+    pgeo.attributes.position.needsUpdate = true;
+    if (opts.onFrame) opts.onFrame(st, t);
+    if (composer) { finish.uniforms.time.value = t % 10; composer.render(); } else renderer.render(scene, cam); };
+  st.loop = now => { if (!st.running) return; st.frame(now); requestAnimationFrame(st.loop); };
+  st.start = () => { if (st.running) return; st.running = true; requestAnimationFrame(st.loop); };
+  st.stop = () => { st.running = false; };
+  st.dispose = () => { st.stop(); renderer.dispose(); renderer.forceContextLoss && renderer.forceContextLoss(); };
+  return st;
+}
+
+    return { makeStage, CUPS, idx: id => CUPS.findIndex(c => c.id === id) };
+  }
+  return { load };
+})();
+
+/* ---------- Coupes de saison : le champion de la saison reçoit la coupe de sa saison ---------- */
+const COUPE_MUSIC = { automne: { root: 38 }, hiver: { root: 40, flavor: { celesta: 1 } }, printemps: { root: 41, flavor: { harp: 1 } }, ete: { root: 36 } };
+const COUPE_INFO = { automne: ["Le Calice des Moissons", "230,140,80", "Automne", "Champion de l'Automne"], hiver: ["La Couronne de Givre", "190,220,255", "Hiver", "Champion de l'Hiver"],
+  printemps: ["Le Graal des Roses", "240,120,130", "Printemps", "Champion du Printemps"], ete: ["La Coupe du Solstice", "245,200,90", "Été", "Champion de l'Été"] };
+const COUPE_ORDRE = ["automne", "hiver", "printemps", "ete"];
+const coupeSaison = k => String(k).split("-")[1];
+const coupesDe = id => Object.entries(state.records).filter(([k, r]) => k.startsWith("saison-") && r && (r.lum || []).includes(id)).map(([, r]) => r).sort((a, b) => a.k.localeCompare(b.k));
+const coupeWhy = r => `${r.pts} points en ${r.n} soirée${r.n > 1 ? "s" : ""}`;
+
+function coupeReveal(c, done) {
+  const [cname, rc] = COUPE_INFO[c.s];
+  TroMusic.fanfare(3, COUPE_MUSIC[c.s]);
+  const el = document.createElement("div"); el.className = "cp-rv"; el.style.setProperty("--rc", rc); el.setAttribute("role", "dialog"); el.setAttribute("aria-label", cname);
+  el.innerHTML = `<canvas class="gl"></canvas><div class="cp-glow"></div><div class="cp-flash"></div><div class="cp-txt"><div class="cp-tier">Champion de la saison · ${esc(c.nom)}</div><div class="cp-nm"></div><div class="cp-who">${esc(c.who.map(name).join(", "))} · ${esc(c.why)}</div></div><div class="cp-tap">Touche pour continuer</div>`;
+  document.body.appendChild(el);
+  let st = null, gone = false;
+  const ease = x => 1 - Math.pow(1 - x, 3);
+  Coupe3D.load().then(L => {
+    if (gone) return;
+    st = L.makeStage(el.querySelector("canvas.gl"), L.idx(c.s), { fov: 30, fit: 1.0, lookY: 1.55, startRot: -2.6, rays: true, parts: 1.6, bloom: .75, pr: 2, label: c.nom,
+      onFrame: (s, t) => { const k = ease(Math.min(1, Math.max(0, (t - .3) / 2.6))); s.cup.position.y = -3.4 * (1 - k) + .25; s.cup.scale.setScalar(.6 + .4 * k);
+        if (t < 3.2) s.rot += .09 * (1 - k); s.key.intensity = (1.1 + Math.sin(t * 7.3) * .08) * (.2 + .8 * k); s.spot.intensity = 2.4 * Math.min(1, Math.max(0, (t - 1.2) / 1.6));
+        if (s.rays) { s.rays.material.opacity = .2 * Math.min(1, Math.max(0, (t - 2.6) / 1.2)); s.rays.rotation.z = t * .06; } } });
+    st.start(); el.classList.add("on");
+  }).catch(() => el.classList.add("flat"));
+  const nm = el.querySelector(".cp-nm"); let n = 0; const typer = setTimeout(function tick() { nm.textContent = cname.slice(0, ++n); if (n < cname.length) setTimeout(tick, 70); }, 3900);
+  const t0 = Date.now();
+  el.addEventListener("click", () => {
+    if (Date.now() - t0 < 1500) return;
+    gone = true; clearTimeout(typer); TroMusic.stopMusic(1.2); if (st) st.dispose(); el.remove(); if (done) done();
+  });
+}
+
+/* vitrine : les quatre coupes, en ombre tant qu'elles ne sont pas gagnées */
+const CP_THUMB = {};
+function coupeVitrineHTML(id) {
+  const won = coupesDe(id);
+  if (won.length) TroMusic.preloadMusic([...new Set(won.map(r => coupeSaison(r.k)))].map(s => [3, COUPE_MUSIC[s]]));
+  setTimeout(coupeThumbs, 80);
+  const cells = COUPE_ORDRE.map(s => {
+    const w = won.filter(r => coupeSaison(r.k) === s), [cname, , , champ] = COUPE_INFO[s];
+    return w.length
+      ? `<button class="tro-cell" data-act="cp-show" data-k="${esc(w[w.length - 1].k)}" aria-label="${esc(cname)}"><img class="cp-img" data-coupe="${s}" alt=""><b>${esc(cname)}</b><small class="tro-max">${w.length > 1 ? "× " + w.length + " · " : ""}${esc(w.map(r => r.nom).join(", "))}</small></button>`
+      : `<div class="tro-cell lock"><img class="cp-img lock" data-coupe="${s}" alt=""><b>${esc(cname)}</b><small>${esc(champ)}</small></div>`;
+  });
+  return `<h4 class="sub">Coupes de saison <span class="muted small">${won.length}</span></h4><div class="cp-grid">${cells.join("")}</div>`;
+}
+let cpBusy = false;
+async function coupeThumbs() {
+  const imgs = [...document.querySelectorAll("img.cp-img:not([src])")]; if (!imgs.length || cpBusy) return;
+  const fill = () => document.querySelectorAll("img.cp-img:not([src])").forEach(i => { const u = CP_THUMB[i.dataset.coupe]; if (u) i.src = u; });
+  COUPE_ORDRE.forEach(s => { if (!CP_THUMB[s]) try { const u = localStorage.getItem(LS + "-coupe-" + s); if (u) CP_THUMB[s] = u; } catch (e) {} });
+  fill();
+  const need = [...new Set([...document.querySelectorAll("img.cp-img:not([src])")].map(i => i.dataset.coupe))]; if (!need.length) return;
+  cpBusy = true;
+  try {
+    const L = await Coupe3D.load();
+    for (const s of need) {
+      await new Promise(r => setTimeout(r, 30));
+      const cv = document.createElement("canvas"); cv.style.cssText = "position:fixed;left:-9999px;top:0;width:240px;height:300px"; document.body.appendChild(cv);
+      try {
+        const st = L.makeStage(cv, L.idx(s), { startRot: .5, parts: .5, pr: 1.5, label: COUPE_INFO[s][2] });
+        st.frame(performance.now()); st.frame(performance.now() + 16);
+        CP_THUMB[s] = cv.toDataURL("image/jpeg", .86); st.dispose();
+        try { localStorage.setItem(LS + "-coupe-" + s, CP_THUMB[s]); } catch (e) {}
+      } catch (e) {}
+      cv.remove(); fill();
+    }
+  } catch (e) {}
+  cpBusy = false;
+}
+function coupeAction(act, el) {
+  if (act === "cp-show") { const r = state.records["saison-" + el.dataset.k]; if (r) coupeReveal({ s: coupeSaison(r.k), nom: r.nom, who: r.lum || [], why: coupeWhy(r) }); }
+}
 
 /* Sons fabriqués dans le navigateur (aucun fichier) */
 let actx = null;
@@ -5603,6 +6176,7 @@ function announce(t) { revealQueue.push(t); if (!revealing) nextReveal(); }
 function nextReveal() {
   const t = revealQueue.shift(); if (!t) { revealing = false; return; }
   if (t.tro) { revealing = true; troReveal(t.tro, nextReveal); return; }
+  if (t.coupe) { revealing = true; coupeReveal(t.coupe, nextReveal); return; }
   revealing = true;
   const el = document.createElement("div"); el.className = "reveal " + (t.k || "fun"); el.setAttribute("role", "alert");
   const sparks = Array.from({ length: 12 }, (_, i) => `<span class="spark" style="--a:${i * 30}deg">${t.k === "ten" ? "🔥" : "✨"}</span>`).join("");
@@ -5644,6 +6218,7 @@ document.addEventListener("click", e => {
   if (act.startsWith("rit-")) { ritAction(act, el); return; }
   if (act.startsWith("px-")) { pxAction(act, el); return; }
   if (act.startsWith("tro-")) { troAction(act, el); return; }
+  if (act.startsWith("cp-")) { coupeAction(act, el); return; }
   if (act.startsWith("sa-")) { saAction(act, el); return; }
   if (act === "sheet-close" && el.classList.contains("sheet-bg") && e.target !== el) return;
   const s = activeSoiree();
