@@ -2933,6 +2933,7 @@ function listen(c) {
 async function connect() {
   let cl = null;
   try { cl = window.claude && window.claude.use ? await window.claude.use("db") : null; } catch (e) { cl = null; }
+  if (!cl) cl = await fbDb();
   if (!cl) { mode = "local"; render(); return; }
   db = cl; mode = "db";
   try {
@@ -2944,6 +2945,80 @@ async function connect() {
   flush();
   for (const c of COLLS) listen(c);
   render();
+}
+
+/* ---------- Synchro du site : tous les téléphones du groupe partagent la même base (Firebase) ---------- */
+// Chaque document est rangé en texte (champ j) : Firestore refuse les tableaux dans des tableaux.
+const FB_CONF = {"apiKey":"AIzaSyAgzHiyld1-sRDHTnlzl3neKtvfoC72vRg","authDomain":"lostenebros-e94b3.firebaseapp.com","projectId":"lostenebros-e94b3","storageBucket":"lostenebros-e94b3.firebasestorage.app","messagingSenderId":"334302317769","appId":"1:334302317769:web:d4d87bedc5c5e8d06d5118"};
+const FB_GROUPE = "tenebros-RfmcJG9w98dhrZR3eB7OPZEo";
+const FB_INIT = LS + "-synchro";
+function fbScript(src) {
+  return new Promise((ok, ko) => { const s = document.createElement("script"); s.src = src; s.onload = ok; s.onerror = ko; document.head.appendChild(s); });
+}
+const normNom = n => String(n || "").trim().toLowerCase().normalize("NFD").replace(/[̀-ͯ]/g, "");
+// Première synchro de ce téléphone : ses joueurs rejoignent ceux du groupe qui ont le même nom,
+// puis tout ce qu'il a joué jusque-là part dans la base.
+async function fbPremiereFois(base) {
+  try { if (localStorage.getItem(FB_INIT) === FB_GROUPE) return; } catch (e) { return; }
+  const lire = async c => { const out = {}; (await base.collection(c).get()).docs.forEach(d => { try { out[d.id] = JSON.parse(d.data().j); } catch (e) {} }); return out; };
+  const rp = await lire("players"), rr = await lire("records");
+  const parNom = {}; Object.entries(rp).forEach(([id, p]) => { parNom[normNom(p.name)] = id; });
+  const remap = {};
+  Object.entries(state.players).forEach(([id, p]) => { const r = parNom[normNom(p.name)]; if (r && r !== id) remap[id] = r; });
+  if (Object.keys(remap).length) {
+    let txt = JSON.stringify(state);
+    for (const [a, b] of Object.entries(remap)) txt = txt.split(a).join(b);
+    const next = JSON.parse(txt);
+    for (const a of Object.keys(remap)) delete next.players[a];
+    Object.keys(state).forEach(k => delete state[k]); Object.assign(state, next);
+    try { const moi = JSON.parse(localStorage.getItem("lostenebros-moi") || "null"); if (moi && remap[moi.pid]) { moi.pid = remap[moi.pid]; localStorage.setItem("lostenebros-moi", JSON.stringify(moi)); } } catch (e) {}
+  }
+  // records : on garde le meilleur Tracks, on réunit l'historique des questions, les palmarès de saison du groupe priment
+  const skip = new Set();
+  for (const [k, v] of Object.entries(rr)) {
+    const l = state.records[k];
+    if (!l) { state.records[k] = v; skip.add(k); continue; }
+    if (k === "tracks") { if ((v.value || 0) >= (l.value || 0)) { state.records[k] = v; skip.add(k); } }
+    else if (k.startsWith("vu-")) { state.records[k] = { ids: Array.from(new Set([].concat(v.ids || [], l.ids || []))) }; }
+    else { state.records[k] = v; skip.add(k); }
+  }
+  saveLocal();
+  for (const c of COLLS) for (const id of Object.keys(state[c])) {
+    if (c === "records" && skip.has(id)) continue;
+    if (c === "players" && rp[id]) continue;
+    const key = c + "/" + id; dirty[key] = (dirty[key] || 0) + 1;
+  }
+  saveDirty();
+  try { localStorage.setItem(FB_INIT, FB_GROUPE); } catch (e) {}
+}
+async function fbDb() {
+  if (!FB_CONF || !FB_CONF.projectId) return null;
+  try {
+    const V = "https://www.gstatic.com/firebasejs/10.12.2/";
+    await fbScript(V + "firebase-app-compat.js");
+    await fbScript(V + "firebase-firestore-compat.js");
+    const fs = firebase.firestore(firebase.initializeApp(FB_CONF));
+    const base = fs.collection("groupes").doc(FB_GROUPE);
+    // l'appli relance d'elle-même sur "unavailable" ; aucune erreur réseau ne doit la passer en lecture seule
+    const err = e => { const x = new Error((e && e.message) || "synchro"); x.code = "unavailable"; return x; };
+    await fbPremiereFois(base);
+    return {
+      doc(key) {
+        const i = key.indexOf("/"), ref = base.collection(key.slice(0, i)).doc(key.slice(i + 1));
+        return {
+          set: data => ref.set({ j: JSON.stringify(data), t: Date.now() }).catch(e => { throw err(e); }),
+          delete: () => ref.delete().catch(e => { throw err(e); }),
+        };
+      },
+      collection(c) {
+        return {
+          onSnapshot: (cb, onErr) => base.collection(c).onSnapshot(snap => cb({
+            docs: snap.docs.map(d => ({ id: d.id, exists: true, data: () => { try { return JSON.parse(d.data().j); } catch (e) { return {}; } } })),
+          }), onErr),
+        };
+      },
+    };
+  } catch (e) { return null; }
 }
 
 /* ---------- Calculs ---------- */
