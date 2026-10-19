@@ -3086,12 +3086,150 @@ async function pfLearn() {
 }
 async function pfSync(learn) {
   if (pfBusy || !FB_FS) return; pfBusy = true;
-  try { if (learn) await pfLearn(); await pfPublish(); await pfFetch(); } catch (e) {} finally { pfBusy = false; }
+  try { if (learn) await pfLearn(); await pfPublish(); await pfFetch(); await pfResume(); if (learn) await pfCerclesFetch(); } catch (e) {} finally { pfBusy = false; }
 }
 setTimeout(() => pfSync(1), 4000);
 let pfTick = 0;
 setInterval(() => pfSync(++pfTick % 5 === 0), 60000);
 document.addEventListener("visibilitychange", () => { if (!document.hidden) pfSync(1); });
+
+/* ---------- Cercles : des amis qui se comparent, chacun avec toutes ses soirées ---------- */
+// Chaque profil publie un résumé de ses stats ; un cercle ne lit que les résumés de ses membres.
+const PF_CERCLES = LS + "-cercles"; // [{id, n}] : les cercles de ce téléphone
+const PF_RES = LS + "-resume";
+const pfProfils = () => FB_FS.collection("groupes").doc(PF_BASE).collection("profils");
+const pfCercleDoc = id => FB_FS.collection("groupes").doc(PF_BASE).collection("cercles").doc(id);
+function pfMine() { try { return JSON.parse(localStorage.getItem(PF_CERCLES) || "[]"); } catch (e) { return []; } }
+function pfSaveMine(l) { try { localStorage.setItem(PF_CERCLES, JSON.stringify(l)); } catch (e) {} }
+function pfMoi() { const o = pxOwner(); const pl = o && state.players[o.pid]; return pl && pl.gid ? pl : null; }
+async function pfResume() {
+  const me = pfMoi(); if (!me) return;
+  const r = { n: me.name, a: pxSummary(me.id), s: typeof saisonSummary === "function" ? saisonSummary(me.id) : null };
+  delete r.a.ti;
+  const j = JSON.stringify(r); if (localStorage.getItem(PF_RES) === j) return;
+  await pfProfils().doc(me.gid).set(Object.assign({ t: Date.now() }, r));
+  try { localStorage.setItem(PF_RES, j); } catch (e) {}
+}
+// la liste des cercles suit le profil : un téléphone neuf la retrouve
+async function pfCerclesFetch() {
+  const me = pfMoi(); if (!me) return;
+  const snap = await FB_FS.collection("groupes").doc(PF_BASE).collection("cercles").where("m." + me.gid, ">", 0).get();
+  const l = snap.docs.map(d => ({ id: d.id, n: d.data().n }));
+  if (JSON.stringify(l.map(c => c.id).sort()) !== JSON.stringify(pfMine().map(c => c.id).sort())) { pfSaveMine(l); render(); }
+}
+function pfWaitDb() { return new Promise(ok => { let n = 0; const t = setInterval(() => { if (FB_FS || ++n > 60) { clearInterval(t); ok(!!FB_FS); } }, 250); }); }
+async function pfJoin(id) {
+  const me = pfMoi(); if (!me) return;
+  ui.sheet = { step: "px-ce-load" }; render();
+  try {
+    if (!(await pfWaitDb())) throw 0;
+    const doc = await pfCercleDoc(id).get(); if (!doc.exists) { toast("Ce cercle n'existe plus."); ui.sheet = null; render(); return; }
+    await pfCercleDoc(id).set({ m: { [me.gid]: Date.now() } }, { merge: true });
+    const l = pfMine().filter(c => c.id !== id); l.push({ id, n: doc.data().n }); pfSaveMine(l);
+    localStorage.removeItem(PF_RES); await pfResume().catch(() => {});
+    toast(`Tu es dans le cercle ${doc.data().n}.`); pfOpen(id);
+  } catch (e) { toast("Pas de réseau : réessaie dans un moment."); ui.sheet = null; render(); }
+}
+async function pfJoinOpen(id) {
+  if (pfMine().some(c => c.id === id)) { pfOpen(id); return; }
+  ui.sheet = { step: "px-ce-join", id, n: null }; render();
+  if (!(await pfWaitDb())) return;
+  try { const doc = await pfCercleDoc(id).get(); if (ui.sheet && ui.sheet.id === id) { ui.sheet.n = doc.exists ? doc.data().n : ""; render(); } } catch (e) {}
+}
+async function pfOpen(id) {
+  const c = pfMine().find(x => x.id === id); ui.sheet = { step: "px-ce-voir", id, n: c ? c.n : "", rows: null, sc: "saison", k: "pt" }; render();
+  try {
+    if (!(await pfWaitDb())) throw 0;
+    await pfResume().catch(() => {});
+    const doc = await pfCercleDoc(id).get(); if (!doc.exists) throw 0;
+    const gids = Object.keys(doc.data().m || {});
+    const docs = await Promise.all(gids.map(g => pfProfils().doc(g).get().catch(() => null)));
+    if (!ui.sheet || ui.sheet.id !== id) return;
+    ui.sheet.n = doc.data().n; ui.sheet.rows = docs.filter(d => d && d.exists).map(d => Object.assign({ g: d.id }, d.data())); render();
+  } catch (e) { if (ui.sheet && ui.sheet.id === id) { ui.sheet.err = 1; render(); } }
+}
+async function pfCreate(n) {
+  const me = pfMoi(); if (!me) return;
+  const id = "c" + uid() + uid() + uid();
+  ui.sheet = { step: "px-ce-load" }; render();
+  try {
+    if (!(await pfWaitDb())) throw 0;
+    await pfCercleDoc(id).set({ n, t: Date.now(), m: { [me.gid]: Date.now() } });
+    pfSaveMine(pfMine().concat({ id, n })); pfShowQR(id);
+    localStorage.removeItem(PF_RES); pfResume().catch(() => {});
+  } catch (e) { toast("Pas de réseau : réessaie dans un moment."); ui.sheet = null; render(); }
+}
+function pfShowQR(id) { const c = pfMine().find(x => x.id === id); ui.sheet = { step: "px-ce-qr", id, n: c ? c.n : "", svg: pxQR(PX_SITE + "#c=" + id) }; render(); }
+async function pfLeave(id) {
+  const me = pfMoi(); pfSaveMine(pfMine().filter(c => c.id !== id)); ui.sheet = null; render();
+  if (me && FB_FS) try { await pfCercleDoc(id).set({ m: { [me.gid]: firebase.firestore.FieldValue.delete() } }, { merge: true }); } catch (e) {}
+}
+function pfCerclesHTML() {
+  const l = pfMine();
+  return `<section class="pf-cercles"><h2>Mes cercles</h2>
+    ${l.length ? `<div class="pf-list">${l.map(c => `<button class="btn block" data-act="px-ce-open" data-id="${esc(c.id)}">${esc(c.n)}</button>`).join("")}</div>` : `<p class="muted small">Un cercle, c'est ta bande : chacun y retrouve le classement de tous, avec toutes ses soirées, même jouées ailleurs.</p>`}
+    <div class="row"><button class="btn" data-act="px-ce-new">Créer un cercle</button><button class="btn" data-act="px-scan">📷 Rejoindre</button></div></section>`;
+}
+const PF_STATS = [["pt", "Points"], ["ga", "Ténèbres"], ["w", "Victoires"], ["cs", "Culs secs"], ["so", "Soirées"]];
+function pfSheet(sh, box, close) {
+  const me = pfMoi();
+  if (sh.step === "px-ce-load") return box("Cercle", `<div class="empty">Un instant…</div>`);
+  if (!me && sh.step !== "px-ce-join") return box("Cercle", `<h3>Qui es-tu ?</h3><p class="muted small">Pour les cercles, ce téléphone doit savoir qui tu es.</p><button class="btn primary block" data-act="px-mine">Choisir mon nom</button>${close}`);
+  if (sh.step === "px-ce-join") {
+    const nm = sh.n == null ? "…" : sh.n || "ce cercle";
+    if (me) return box("Rejoindre", `<h3>Rejoindre ${esc(nm)}</h3><p class="muted small">Tes stats, toutes soirées comprises, apparaîtront dans le classement du cercle, sous le nom ${esc(me.name)}.</p>
+      <button class="btn primary block" data-act="px-ce-join" data-id="${esc(sh.id)}">Rejoindre</button>${close}`);
+    const all = Object.values(state.players).filter(p => !p.hidden).sort((a, b) => a.name.localeCompare(b.name));
+    return box("Rejoindre", `<h3>Rejoindre ${esc(nm)}</h3><p class="muted small">Qui es-tu ? Choisis ton nom, ou écris-le.</p>
+      ${all.length ? `<div class="row">${all.map(p => `<button class="chip" data-act="px-me" data-id="${p.id}">${esc(p.name)}</button>`).join("")}</div>` : ""}
+      <form class="px-name"><input id="px-name" placeholder="Ton nom" maxlength="24" autocomplete="off" aria-label="Ton nom"><button class="btn" type="submit">OK</button></form>${pxInstallHTML()}${close}`);
+  }
+  if (sh.step === "px-ce-new") return box("Nouveau cercle", `<h3>Nouveau cercle</h3><p class="muted small">Donne-lui un nom (ta bande, les collègues…). Tu montreras ensuite son QR à tes amis.</p>
+    <div class="px-name"><input id="pf-cn" placeholder="Nom du cercle" maxlength="30" autocomplete="off" aria-label="Nom du cercle"><button class="btn" data-act="px-ce-make">Créer</button></div>${close}`);
+  if (sh.step === "px-ce-qr") return box("Inviter", `<h3>Inviter dans ${esc(sh.n)}</h3><div class="px-qr">${sh.svg}</div>
+    <p class="muted small center">Tes amis scannent ce QR avec l'appareil photo, ou depuis l'appli (📷 Rejoindre). Ceux qui n'ont pas l'appli la découvrent en même temps.</p>
+    <button class="btn primary block" data-act="px-ce-open" data-id="${esc(sh.id)}">Voir le classement</button>${close}`);
+  if (sh.step === "px-ce-voir") {
+    let body;
+    if (sh.err) body = `<div class="empty">Pas de réseau : le classement n'a pas pu se charger.</div>`;
+    else if (!sh.rows) body = `<div class="empty">Le classement arrive…</div>`;
+    else {
+      const sa = typeof saisonOf === "function" ? saisonOf(saisonNow()) : null;
+      const val = r => { const x = sh.sc === "saison" ? (r.s && sa && r.s.k === sa.k ? r.s : {}) : (r.a || {}); return x[sh.k] || 0; };
+      const rows = sh.rows.slice().sort((a, b) => val(b) - val(a) || a.n.localeCompare(b.n));
+      let rk = 0, prev = null;
+      body = `${sa ? `<div class="seg scope"><button class="l ${sh.sc === "saison" ? "on" : ""}" data-act="px-ce-sc" data-v="saison">${esc(sa.nom)}</button><button class="l ${sh.sc === "all" ? "on" : ""}" data-act="px-ce-sc" data-v="all">Depuis le début</button></div>` : ""}
+        <div class="row statchips">${PF_STATS.map(([k, l]) => `<button class="chip ${sh.k === k ? "on" : ""}" data-act="px-ce-k" data-v="${k}">${l}</button>`).join("")}</div>
+        <ol class="pf-board">${rows.map((r, i) => { const v = val(r); if (v !== prev) { rk = i + 1; prev = v; } return `<li class="${r.g === me.gid ? "me" : ""}"><i>${rk}</i><span>${esc(r.n)}</span><b class="num">${v}</b></li>`; }).join("")}</ol>
+        <p class="muted small">${rows.length} membre${rows.length > 1 ? "s" : ""}. Les stats de chacun se mettent à jour quand il ouvre l'appli.</p>`;
+    }
+    return box("Cercle", `<h3>${esc(sh.n || "Cercle")}</h3>${body}
+      <button class="btn block" data-act="px-ce-qr" data-id="${esc(sh.id)}">Inviter (QR du cercle)</button>
+      <button class="linkbtn" data-act="px-ce-leave" data-id="${esc(sh.id)}">Quitter ce cercle</button>${close}`);
+  }
+  return "";
+}
+function pfAction(act, el) {
+  const id = el.dataset.id;
+  switch (act) {
+    case "px-ce-new": if (!pfMoi()) { pxShowMine(); return; } ui.sheet = { step: "px-ce-new" }; render(); setTimeout(() => { const i = document.getElementById("pf-cn"); if (i) i.focus(); }, 50); return;
+    case "px-ce-make": { const i = document.getElementById("pf-cn"); const n = i && i.value.trim(); if (n) pfCreate(n); return; }
+    case "px-ce-open": pfOpen(id); return;
+    case "px-ce-join": pfJoin(id); return;
+    case "px-ce-qr": pfShowQR(id); return;
+    case "px-ce-leave": pfLeave(id); return;
+    case "px-ce-sc": ui.sheet.sc = el.dataset.v; render(); return;
+    case "px-ce-k": ui.sheet.k = el.dataset.v; render(); return;
+  }
+}
+(function () {
+  const st = document.createElement("style");
+  st.textContent = `.pf-list{display:grid;gap:8px;margin:8px 0}.pf-board{list-style:none;padding:0;margin:10px 0;display:grid;gap:6px}
+.pf-board li{display:flex;align-items:center;gap:10px;padding:8px 12px;border:1px solid var(--line);border-radius:10px;background:var(--surface)}
+.pf-board li i{font-style:normal;width:1.6em;color:var(--muted)}.pf-board li span{flex:1}.pf-board li b{color:var(--lumiere)}
+.pf-board li.me{border-color:var(--lumiere)}`;
+  document.head.appendChild(st);
+})();
 
 /* ---------- Calculs ---------- */
 // pendant la soirée, les vaincus du Rituel portent leur nom de la honte
@@ -4850,6 +4988,7 @@ function pxInstallHTML() {
 function pxSheet(sh) {
   const box = (label, inner) => `<div class="sheet-bg" data-act="sheet-close"><div class="sheet px" role="dialog" aria-label="${label}">${inner}</div></div>`;
   const close = `<button class="btn ghost block" data-act="sheet-close">Fermer</button>`;
+  if (sh.step.startsWith("px-ce-") && typeof pfSheet === "function") return pfSheet(sh, box, close);
   if (sh.step === "px-who") {
     const all = Object.values(state.players).filter(p => !p.hidden).sort((a, b) => a.name.localeCompare(b.name));
     return box("Qui es-tu ?", `<h3>Qui es-tu ?</h3><p class="muted small">Ce téléphone est à toi : choisis ton nom, ou écris-le.</p>
@@ -4987,8 +5126,9 @@ async function pxScanOpen() {
 }
 async function pxScanned(txt, msg) {
   const now = Date.now(); if (txt === pxCam.last && now - pxCam.lastAt < 4000) return; pxCam.last = txt; pxCam.lastAt = now;
-  const m = String(txt).match(/#([js])=([A-Za-z0-9_-]+)/);
+  const m = String(txt).match(/#([jsc])=([A-Za-z0-9_-]+)/);
   if (!m) { msg("Ce n'est pas un QR Los Ténébros."); return; }
+  if (m[1] === "c") { pxScanClose(); if (typeof pfJoinOpen === "function") pfJoinOpen(m[2]); return; }
   let d; try { d = await pxUnpack(m[2]); } catch (e) { msg("QR illisible, réessaie."); return; }
   if (m[1] === "s") { pxScanClose(); pxOpen("s", d); return; }
   const rec = pxAddScanned(d);
@@ -5005,9 +5145,13 @@ function pxScanClose() {
 }
 
 function pxAction(act, el) {
+  if (act.startsWith("px-ce-") && typeof pfAction === "function") return pfAction(act, el);
   switch (act) {
     case "px-mine": pxShowMine(); return;
-    case "px-me": pxMakeMe(el.dataset.id); if (ui.sheet && ui.sheet.step === "px-who") pxShowMine(); return;
+    case "px-me": pxMakeMe(el.dataset.id);
+      if (ui.sheet && ui.sheet.step === "px-ce-join" && typeof pfJoin === "function") pfJoin(ui.sheet.id);
+      else if (ui.sheet && ui.sheet.step === "px-who") pxShowMine();
+      return;
     case "px-soiree": pxShowSoiree(el.dataset.id); return;
     case "px-send": {
       const url = ui.sheet && ui.sheet.url; if (!url) return;
@@ -5043,11 +5187,13 @@ document.addEventListener("submit", e => {
   const ex = Object.values(state.players).find(p => p.name.toLowerCase() === n.toLowerCase());
   const id = ex ? ex.id : uid();
   if (!ex) put("players", id, { id, name: n, created: new Date().toISOString() });
-  pxMakeMe(id); pxShowMine();
+  pxMakeMe(id);
+  if (ui.sheet && ui.sheet.step === "px-ce-join" && typeof pfJoin === "function") pfJoin(ui.sheet.id); else pxShowMine();
 });
 function pxBoot() {
-  const m = location.hash.match(/^#([js])=([A-Za-z0-9_-]+)/); if (!m) return;
+  const m = location.hash.match(/^#([jsc])=([A-Za-z0-9_-]+)/); if (!m) return;
   try { history.replaceState(null, "", location.pathname + location.search); } catch (e) {}
+  if (m[1] === "c") { if (typeof pfJoinOpen === "function") pfJoinOpen(m[2]); return; }
   pxUnpack(m[2]).then(d => pxOpen(m[1], d)).catch(() => toast("Ce lien est abîmé : redemande le QR."));
 }
 window.addEventListener("hashchange", pxBoot);
@@ -5117,6 +5263,7 @@ function viewSaison() {
 function viewAllTime() {
   const sc = ui.allScope || "saison";
   return `<section><button class="btn block" data-act="px-mine">📱 ${pxOwner() ? "Mon QR joueur" : "Créer mon QR joueur"}</button></section>
+  ${typeof pfCerclesHTML === "function" ? pfCerclesHTML() : ""}
   <div class="seg scope" role="tablist"><button class="l ${sc === "saison" ? "on" : ""}" data-act="sa-scope" data-v="saison">Saison</button><button class="l ${sc === "all" ? "on" : ""}" data-act="sa-scope" data-v="all">Depuis le début</button></div>
   ${sc === "saison" ? viewSaison() : viewAllTimeBase()}`;
 }
