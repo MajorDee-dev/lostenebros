@@ -2952,6 +2952,7 @@ async function connect() {
 const FB_CONF = {"apiKey":"AIzaSyAgzHiyld1-sRDHTnlzl3neKtvfoC72vRg","authDomain":"lostenebros-e94b3.firebaseapp.com","projectId":"lostenebros-e94b3","storageBucket":"lostenebros-e94b3.firebasestorage.app","messagingSenderId":"334302317769","appId":"1:334302317769:web:d4d87bedc5c5e8d06d5118"};
 const FB_GROUPE = "tenebros-RfmcJG9w98dhrZR3eB7OPZEo";
 const FB_INIT = LS + "-synchro";
+let FB_FS = null; // la base Firestore, une fois chargée (sert aussi aux profils)
 function fbScript(src) {
   return new Promise((ok, ko) => { const s = document.createElement("script"); s.src = src; s.onload = ok; s.onerror = ko; document.head.appendChild(s); });
 }
@@ -2998,6 +2999,7 @@ async function fbDb() {
     await fbScript(V + "firebase-app-compat.js");
     await fbScript(V + "firebase-firestore-compat.js");
     const fs = firebase.firestore(firebase.initializeApp(FB_CONF));
+    FB_FS = fs;
     const base = fs.collection("groupes").doc(FB_GROUPE);
     // l'appli relance d'elle-même sur "unavailable" ; aucune erreur réseau ne doit la passer en lecture seule
     const err = e => { const x = new Error((e && e.message) || "synchro"); x.code = "unavailable"; return x; };
@@ -3020,6 +3022,76 @@ async function fbDb() {
     };
   } catch (e) { return null; }
 }
+
+/* ---------- Profils : chaque soirée où joue un profil part en ligne, et chaque profil récupère ses soirées ---------- */
+// Les soirées partagées sont rangées à part du groupe, sous un chemin que les règles Firestore acceptent déjà.
+const PF_BASE = "partage-des-soirees-lostenebros-v1";
+const PF_PUB = LS + "-publiees"; // {id de soirée: empreinte de ce qui a été publié}
+let pfBusy = false;
+const pfColl = () => FB_FS.collection("groupes").doc(PF_BASE).collection("soirees");
+// qui s'est reconnu au QR de fin : le téléphone qui a compté apprend son profil
+const pfLiens = () => FB_FS.collection("groupes").doc(PF_BASE).collection("liens");
+function pfHash(t) { let h = 5381; for (let i = 0; i < t.length; i++) h = (h * 33 + t.charCodeAt(i)) | 0; return String(h >>> 0); }
+function pfPubMap() { try { return JSON.parse(localStorage.getItem(PF_PUB) || "{}"); } catch (e) { return {}; } }
+// les soirées comptées sur ce téléphone, dès qu'au moins un joueur a un profil
+async function pfPublish() {
+  const pub = pfPubMap(); let n = 0;
+  for (const s of Object.values(state.soirees)) {
+    if (!s.closed || s.imported) continue;
+    const d = pxSoireeData(s.id); const g = [...new Set(d.P.map(x => x[1]).filter(Boolean))];
+    if (!g.length) continue;
+    const j = JSON.stringify(d), h = pfHash(j);
+    if (pub[d.i] === h) continue;
+    await pfColl().doc(d.i).set({ j, g, t: Date.now() });
+    pub[d.i] = h; n++;
+  }
+  if (n) try { localStorage.setItem(PF_PUB, JSON.stringify(pub)); } catch (e) {}
+}
+// les soirées des autres téléphones où ce profil a joué
+function pfDrop(sid) {
+  Object.values(state.parties).filter(p => p.soireeId === sid).forEach(p => remove("parties", p.id));
+  remove("soirees", sid);
+}
+async function pfFetch() {
+  const o = pxOwner(); if (!o) return; const g = state.players[o.pid].gid; if (!g) return;
+  const snap = await pfColl().where("g", "array-contains", g).get();
+  for (const doc of snap.docs) {
+    const v = doc.data(); let d; try { d = JSON.parse(v.j); } catch (e) { continue; }
+    const loc = Object.values(state.soirees).find(s => s.id === d.i || s.src === d.i);
+    if (loc && !loc.imported) continue;          // comptée ici même
+    if (loc && (loc.pubT || 0) >= v.t) continue; // déjà à jour
+    if (loc) pfDrop(loc.id);
+    const me = d.P.findIndex(x => x[1] === g);
+    pxImport(d, me < 0 ? null : me, { silent: true, pubT: v.t });
+  }
+}
+// côté joueur qui scanne le QR de fin et choisit son nom
+function pfLink(sid, idx) {
+  const o = pxOwner(); if (!o || !FB_FS) return; const g = state.players[o.pid].gid; if (!g) return;
+  pfLiens().doc(sid).set({ [idx]: g }, { merge: true }).catch(() => {});
+}
+// côté téléphone qui a compté : les soirées des 3 derniers jours où un joueur n'a pas encore de profil
+async function pfLearn() {
+  const lim = Date.now() - 3 * 864e5;
+  for (const s of Object.values(state.soirees)) {
+    if (!s.closed || s.imported || new Date(s.closedAt || 0) < lim) continue;
+    if (s.playerIds.every(id => (state.players[id] || {}).gid)) continue;
+    const doc = await pfLiens().doc(s.id).get(); if (!doc.exists) continue;
+    Object.entries(doc.data()).forEach(([i, g]) => {
+      const id = s.playerIds[+i], pl = state.players[id];
+      if (!pl || pl.gid || Object.values(state.players).some(p => p.gid === g)) return;
+      put("players", id, Object.assign({}, pl, { gid: g }));
+    });
+  }
+}
+async function pfSync(learn) {
+  if (pfBusy || !FB_FS) return; pfBusy = true;
+  try { if (learn) await pfLearn(); await pfPublish(); await pfFetch(); } catch (e) {} finally { pfBusy = false; }
+}
+setTimeout(() => pfSync(1), 4000);
+let pfTick = 0;
+setInterval(() => pfSync(++pfTick % 5 === 0), 60000);
+document.addEventListener("visibilitychange", () => { if (!document.hidden) pfSync(1); });
 
 /* ---------- Calculs ---------- */
 // pendant la soirée, les vaincus du Rituel portent leur nom de la honte
@@ -4809,7 +4881,8 @@ function pxSheet(sh) {
       ${pxInstallHTML()}${o ? `<button class="btn block" data-act="px-stats">Voir mes stats</button>` : ""}${close}`);
   }
   if (sh.step === "px-qrj") {
-    return box("QR joueur", `<h3>Le QR joueur de ${esc(sh.data.n)}</h3><p class="muted small">Pour l'ajouter à une soirée, le maître du jeu le scanne depuis l'appli : écran des joueurs, bouton 📷 Scanner les QR.</p>${pxInstallHTML()}${close}`);
+    return box("QR joueur", `<h3>Le QR joueur de ${esc(sh.data.n)}</h3><p class="muted small">Pour l'ajouter à une soirée, le maître du jeu le scanne depuis l'appli : écran des joueurs, bouton 📷 Scanner les QR.</p>
+      ${typeof pfSync === "function" && sh.data.g && !pxOwner() ? `<button class="btn primary block" data-act="px-reprendre">C'est moi : récupérer mon profil ici</button><p class="muted small center">Tes soirées reviennent sur ce téléphone, même celles comptées sur le téléphone d'un autre.</p>` : ""}${pxInstallHTML()}${close}`);
   }
   return "";
 }
@@ -4821,14 +4894,15 @@ function pxOpen(kind, d) {
     if (me == null) { const nm = state.players[o.pid].name.toLowerCase(); d.P.forEach(([pn], i) => { if (String(pn).toLowerCase() === nm) me = i; }); } }
   ui.tab = "soiree"; ui.sheet = { step: "px-imp", data: d, dup, me }; render();
 }
-function pxImport(d, meIdx) {
+function pxImport(d, meIdx, opt) {
+  opt = opt || {};
   const o = pxOwner(); const writes = []; const now = new Date().toISOString(); const map = [];
   const list = () => Object.values(state.players);
   d.P.forEach(([n, g], i) => {
     let pl = null;
     if (i === meIdx && o) pl = state.players[o.pid];
     if (!pl && g) pl = list().find(p => p.gid === g);
-    if (!pl) pl = list().find(p => p.name.toLowerCase() === String(n).toLowerCase());
+    if (!pl) pl = list().find(p => p.name.toLowerCase() === String(n).toLowerCase() && (!g || !p.gid || p.gid === g));
     const rec = pl ? Object.assign({}, pl) : { id: uid(), name: n, created: now };
     if (rec.hidden) rec.hidden = false;
     if (g && !rec.gid) rec.gid = g;
@@ -4839,7 +4913,7 @@ function pxImport(d, meIdx) {
   const M = i => map[i]; const R = o2 => { const r = {}; Object.entries(o2 || {}).forEach(([k, v]) => r[M(+k)] = v); return r; };
   const sid = uid();
   state.soirees[sid] = { id: sid, src: d.i, date: d.d, playerIds: d.P.slice(0, d.n || d.P.length).map((_, i) => M(i)),
-    closed: true, closedAt: d.c || now, imported: now, titles: (d.T || []).map(t => Object.assign({}, t, { who: t.who.map(M) })) };
+    closed: true, closedAt: d.c || now, imported: now, pubT: opt.pubT, titles: (d.T || []).map(t => Object.assign({}, t, { who: t.who.map(M) })) };
   writes.push(["soirees", sid]);
   d.A.forEach(a => {
     const id = uid(); const p = { id, soireeId: sid, game: G[a.g] ? a.g : "barbu", players: a.p.map(M), gamelles: (a.x || []).map(x => Object.assign({}, x, { p: M(x.p) })),
@@ -4850,7 +4924,8 @@ function pxImport(d, meIdx) {
     state.parties[id] = p; writes.push(["parties", id]);
   });
   saveLocal(); writes.forEach(([c, id]) => mark(c, id, "put"));
-  ui.sheet = { step: "px-done" }; render();
+  if (!opt.silent) ui.sheet = { step: "px-done" };
+  render();
 }
 function pxAddScanned(d) {
   const list = Object.values(state.players);
@@ -4942,10 +5017,22 @@ function pxAction(act, el) {
       return;
     }
     case "px-pick": ui.sheet.me = Number(el.dataset.i); break;
-    case "px-import": pxImport(ui.sheet.data, el.dataset.none ? null : ui.sheet.me); return;
+    case "px-import": {
+      const d = ui.sheet.data, me = el.dataset.none ? null : ui.sheet.me;
+      pxImport(d, me);
+      if (me != null && typeof pfLink === "function") pfLink(d.i, me);
+      return;
+    }
     case "px-stats": { const o = pxOwner(); ui.tab = "all"; ui.endSoiree = null; ui.partieId = null; ui.sheet = o ? { step: "profile", id: o.pid } : null; break; }
     case "px-install": if (pxInstallEvt) { pxInstallEvt.prompt(); pxInstallEvt = null; } break;
     case "px-scan": pxScanOpen(); return;
+    case "px-reprendre": {
+      const d = ui.sheet && ui.sheet.data; if (!d || !d.g) return;
+      const pl = Object.values(state.players).find(p => p.gid === d.g);
+      const rec = pl ? Object.assign({}, pl, { hidden: false }) : { id: uid(), name: d.n, gid: d.g, created: new Date().toISOString() };
+      put("players", rec.id, rec); pxSetOwner(rec);
+      ui.sheet = null; ui.tab = "all"; toast("Profil récupéré, tes soirées arrivent…"); pfSync(); break;
+    }
     case "px-scan-stop": pxScanClose(); return;
   }
   render();
