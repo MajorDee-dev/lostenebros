@@ -4508,7 +4508,7 @@ function ritDeck(manche, nTeams) {
 }
 function ritInit(p) {
   const nT = p.players.length >= 9 ? 3 : 2;
-  p.rit = { phase: "teams", nTeams: 2, teams: ritDraw(p.players, 2), manche: 1, deck: [], turn: 0, scores: [], cursed: {}, duelWins: {}, cur: null, can3: nT === 3 };
+  p.rit = { phase: "teams", nTeams: nT, teams: ritDraw(p.players, nT), manche: 1, deck: [], turn: 0, scores: [], cursed: {}, duelWins: {}, cur: null, can3: nT === 3 };
   return p;
 }
 const ritMult = r => 1; // plus de points doublés depuis la partie en une manche
