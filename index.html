@@ -70,6 +70,22 @@ header.top { display: flex; align-items: baseline; justify-content: space-betwee
 .intro .in-age .btn { width: 100%; min-height: 48px; }
 .intro .in-age .in-legal { color: var(--muted); font-size: .8rem; margin-top: 6px; }
 .intro.out .in-seal { animation: in-break .5s ease forwards; }
+/* petits écrans et paysage : l'écran d'entrée défile et se tasse, les boutons restent atteignables */
+.intro { overflow-y: auto; overscroll-behavior: contain; -webkit-overflow-scrolling: touch; }
+@media (max-height: 640px) {
+  .intro .in-wrap { gap: 10px; padding: 14px 16px; }
+  .intro .in-seal { width: min(200px, 26vh); height: min(200px, 26vh); }
+  .intro .in-title { font-size: 2.5rem; }
+  .intro .in-tap { margin-top: 12px; }
+  .intro .in-age { margin-top: 8px !important; gap: 8px !important; }
+  .intro .in-age .btn { min-height: 44px !important; }
+}
+@media (max-height: 500px) and (orientation: landscape) {
+  .intro .in-wrap { grid-template-columns: auto minmax(0, 34ch); column-gap: 28px; align-items: center; }
+  .intro .in-wrap > .in-seal { grid-row: 1 / span 4; width: min(180px, 42vh); height: min(180px, 42vh); }
+  .intro .in-wrap > :not(.in-seal) { grid-column: 2; }
+  .intro .in-title { font-size: 2.2rem; }
+}
 @keyframes in-stamp { from { transform: scale(2.4) rotate(-14deg); opacity: 0; } to { transform: none; opacity: 1; } }
 @keyframes in-fade { from { opacity: 0; transform: translateY(8px); } to { opacity: 1; transform: none; } }
 @keyframes in-pulse { 50% { opacity: .45; } }
@@ -3200,8 +3216,8 @@ function pfSheet(sh, box, close) {
     else if (!sh.rows) body = `<div class="empty">Le classement arrive…</div>`;
     else {
       const sa = typeof saisonOf === "function" ? saisonOf(saisonNow()) : null;
-      const val = r => { const x = sh.sc === "saison" ? (r.s && sa && r.s.k === sa.k ? r.s : {}) : (r.a || {}); return x[sh.k] || 0; };
-      const rows = sh.rows.slice().sort((a, b) => val(b) - val(a) || a.n.localeCompare(b.n));
+      const val = r => { const x = sh.sc === "saison" ? (r.s && sa && r.s.k === sa.k ? r.s : {}) : (r.a || {}); const v = Number((x || {})[sh.k]); return isFinite(v) ? v : 0; }; // données en ligne : jamais de HTML, que des nombres
+      const rows = sh.rows.slice().sort((a, b) => val(b) - val(a) || String(a.n).localeCompare(String(b.n)));
       let rk = 0, prev = null;
       body = `${sa ? `<div class="seg scope"><button class="l ${sh.sc === "saison" ? "on" : ""}" data-act="px-ce-sc" data-v="saison">${esc(sa.nom)}</button><button class="l ${sh.sc === "all" ? "on" : ""}" data-act="px-ce-sc" data-v="all">Depuis le début</button></div>` : ""}
         <div class="row statchips">${PF_STATS.map(([k, l]) => `<button class="chip ${sh.k === k ? "on" : ""}" data-act="px-ce-k" data-v="${k}">${l}</button>`).join("")}</div>
@@ -3462,12 +3478,27 @@ function viewSoiree() {
       ${canWrite ? addPlayerForm("soiree") + `<button class="btn block scanbtn" data-act="px-scan">📷 Scanner les QR des joueurs</button>` : ""}
     </details>
   </section>
-  ${canWrite ? `<section>${ui.confirm === "close" ? `<div class="confirm"><b>Terminer la soirée et décerner les titres ?</b><div class="row"><button class="btn primary" data-act="close-yes">Oui, les titres !</button><button class="btn ghost" data-act="confirm-no">Pas encore</button></div></div>` : `<button class="btn ghost block" data-act="close">Terminer la soirée</button>`}</section>` : ""}`;
+  ${canWrite ? `<section>${ui.confirm === "close" ? `<div class="confirm"><b>Terminer la soirée et décerner les titres ?</b>${live ? `<p class="small">${enCoursVide(live) ? `La partie en cours (${esc(G[live.game].name)}) n'a encore rien de noté : elle sera supprimée.` : `La partie en cours (${esc(G[live.game].name)}) sera terminée maintenant : ses châtiments comptent${G[live.game].mode === "gamelle" || Object.keys(live.places || {}).length ? ", et son podium aussi" : ", sans points au classement"}.`}</p>` : ""}<div class="row"><button class="btn primary" data-act="close-yes">Oui, les titres !</button><button class="btn ghost" data-act="confirm-no">Pas encore</button></div></div>` : `<button class="btn ghost block" data-act="close">Terminer la soirée</button>`}</section>` : ""}`;
 }
 
+// fin de soirée avec une partie pas finie : rien de noté, elle disparaît ; sinon elle est terminée (les châtiments restent)
+function enCoursVide(p) { return !(p.gamelles || []).length && !Object.keys(p.places || {}).length && !(p.turns || []).length; }
+function finirEnCours(live) {
+  if (enCoursVide(live)) { remove("parties", live.id); return; }
+  const p = JSON.parse(JSON.stringify(live));
+  ["sept", "ouinon", "dx", "quiz", "tp", "qp", "gd"].forEach(k => { if (p[k] && typeof p[k] === "object") p[k].closed = true; });
+  const g = G[p.game] || {};
+  const podium = g.mode === "gamelle" || (g.mode !== "team" && !p.rit && Object.keys(p.places || {}).length);
+  const fast = podium && typeof tropRapide === "function" && tropRapide(p);
+  if (podium && !fast) { const places = partiePlaces(p); p.places = places; p.points = pointsFromPlaces(places); }
+  else { p.places = {}; p.points = {}; if (fast) p.rapide = 1; else p.inacheve = 1; }
+  p.status = "done"; p.ended = Date.now(); p.finSoiree = 1;
+  put("parties", p.id, p);
+}
 function podiumText(p) {
   if (p.rapide) return "⚡ Trop rapide, pas de points";
-  if (p.rit) return p.rit.win != null ? "🏆 " + esc(p.rit.teams[p.rit.win].name) : "Égalité";
+  if (p.inacheve) return "Arrêtée en fin de soirée, pas de points";
+  if (p.rit) return p.rit.win != null ? "🏆 " + esc(((p.rit.teams || [])[p.rit.win] || {}).name || "?") : "Égalité";
   const pl = p.places || {};
   const by = [1, 2, 3].map(r => Object.keys(pl).filter(id => pl[id] === r).map(name)).map((n, i) => n.length ? `${i + 1}. ${n.join(", ")}` : "").filter(Boolean);
   return esc(by.join(" · ") || "Personne sur le podium");
@@ -3837,7 +3868,44 @@ function render() {
   if (ui.sheet) ov += sheetHTML();
   overlay.innerHTML = ov;
   if (focusId) { const el = document.getElementById(focusId); if (el) { el.focus(); if (val != null) el.value = val; } }
+  histSync();
 }
+/* bouton retour du téléphone : il ferme la feuille (ou le scanner), puis ramène au menu de la soirée, au lieu de quitter l'appli.
+   Une entrée d'historique par niveau ouvert : partie, puis feuille. */
+var histSkip = 0;
+var MINI_KEYS = ["sept", "ouinon", "dx", "quiz", "tp", "qp", "gd"];
+function histWanted() {
+  return (ui.partieId && state.parties[ui.partieId] ? 1 : 0) + (ui.sheet ? 1 : 0) + (typeof pxCam !== "undefined" && pxCam ? 1 : 0);
+}
+function histDepth() { const st = history.state; return st && st.lt > 0 ? st.lt : 0; }
+// après un rechargement, l'appli repart du menu : l'entrée courante redevient la base
+try { if (histDepth()) history.replaceState(null, ""); } catch (e) {}
+function histSync() {
+  if (histSkip) return;
+  try {
+    const w = histWanted(), d = histDepth();
+    if (w > d) { for (let k = d + 1; k <= w; k++) history.pushState({ lt: k }, ""); }
+    else if (w < d) { histSkip++; history.go(w - d); setTimeout(() => { if (histSkip) { histSkip = 0; } }, 1500); }
+  } catch (e) {}
+}
+function histAct(act) { const b = document.createElement("button"); b.hidden = true; b.dataset.act = act; document.body.appendChild(b); try { b.click(); } finally { b.remove(); } }
+function histClose() {
+  if (typeof pxCam !== "undefined" && pxCam) { pxScanClose(); return true; }
+  if (ui.sheet) { histAct("sheet-close"); return true; }
+  if (ui.partieId) {
+    const p = state.parties[ui.partieId];
+    // une manche de mini-jeu en cours (chrono, file de passage) : on reste, la manche se termine avec « Arrêter »
+    if (p && MINI_KEYS.some(k => p[k] && !p[k].closed)) { toast("Manche en cours : touche « Arrêter » pour revenir au menu."); return false; }
+    histAct("back"); return true;
+  }
+  return false;
+}
+window.addEventListener("popstate", () => {
+  if (histSkip) { histSkip--; histSync(); return; }
+  const d = histDepth();
+  for (let i = 0; i < 4 && histWanted() > d; i++) { const before = histWanted(); if (!histClose() || histWanted() >= before) break; }
+  histSync();
+});
 
 function sheetHTML() {
   const sh = ui.sheet; const p = state.parties[ui.partieId];
@@ -3952,14 +4020,21 @@ const RULES = {"gd": "<p><b>Type :</b> jeu maison dans l'app, façon 7 secondes<
 const SEPT = [[1, "couleurs"], [1, "fruits"], [1, "légumes"], [1, "animaux de la ferme"], [1, "parties du corps"], [1, "jours de la semaine"], [1, "mois de l'année"], [1, "boissons sans alcool"], [1, "marques de voitures"], [1, "pays d'Europe"], [1, "vêtements"], [1, "instruments de musique"], [1, "sports"], [1, "meubles"], [1, "métiers"], [1, "moyens de transport"], [1, "prénoms masculins"], [1, "prénoms féminins"], [1, "chiffres en anglais"], [1, "objets dans une cuisine"], [1, "animaux de la mer"], [1, "insectes"], [1, "fleurs"], [1, "desserts"], [1, "fromages"], [1, "super-héros"], [1, "personnages Disney"], [1, "pièces d'une maison"], [1, "marques de bière"], [1, "jeux de société"], [1, "cocktails"], [1, "réseaux sociaux"], [1, "fast-foods"], [1, "choses qu'on trouve sur une plage"], [1, "choses qu'on met dans une valise"], [1, "choses qui volent"], [1, "choses rondes"], [1, "choses froides"], [1, "choses qui piquent"], [1, "planètes"], [1, "formes géométriques"], [1, "saisons et fêtes de l'année"], [1, "oiseaux"], [1, "chaussures (types)"], [1, "bonbons"], [1, "pâtes (types)"], [1, "choses qu'on trouve dans une salle de bain"], [1, "jouets"], [1, "couverts et ustensiles"], [1, "émotions"], [2, "capitales européennes"], [2, "races de chiens"], [2, "races de chats"], [2, "clubs de foot français"], [2, "chanteurs français"], [2, "chanteuses françaises"], [2, "films de Disney"], [2, "séries Netflix"], [2, "marques de téléphones"], [2, "départements français"], [2, "villes françaises"], [2, "fleuves de France"], [2, "plats italiens"], [2, "plats japonais"], [2, "épices"], [2, "arbres"], [2, "légumes verts"], [2, "personnages de Harry Potter"], [2, "personnages des Simpson"], [2, "Pokémon"], [2, "personnages de Mario"], [2, "jeux vidéo"], [2, "consoles de jeux"], [2, "marques de vêtements"], [2, "marques de luxe"], [2, "chaînes de télé françaises"], [2, "émissions de télé-réalité"], [2, "vins ou appellations de vin"], [2, "alcools forts"], [2, "marques de chips"], [2, "céréales du petit-déjeuner"], [2, "langues parlées dans le monde"], [2, "pays d'Afrique"], [2, "pays d'Asie"], [2, "pays d'Amérique du Sud"], [2, "animaux de la savane"], [2, "reptiles"], [2, "dinosaures"], [2, "signes du zodiaque"], [2, "disciplines olympiques"], [2, "joueurs de l'équipe de France de foot"], [2, "acteurs français"], [2, "actrices américaines"], [2, "rappeurs français"], [2, "dessins animés des années 90"], [2, "marques de soda"], [2, "enseignes de supermarché"], [2, "choses qu'on fait en soirée"], [2, "excuses pour ne pas aller au travail"], [2, "choses qu'on dit en étant bourré"], [2, "métiers de la santé"], [2, "outils de bricolage"], [2, "sauces"], [2, "viennoiseries"], [2, "marques de voitures allemandes"], [2, "personnages de contes"], [2, "instruments à cordes"], [2, "sports de combat"], [2, "danses"], [2, "monuments de Paris"], [3, "capitales d'Asie"], [3, "capitales d'Afrique"], [3, "régions françaises"], [3, "îles"], [3, "déserts"], [3, "montagnes ou massifs"], [3, "océans et mers"], [3, "présidents de la Ve République"], [3, "rois de France"], [3, "groupes de rock"], [3, "groupes des années 80"], [3, "chansons de Johnny Hallyday"], [3, "films avec Jean-Paul Belmondo"], [3, "films de Quentin Tarantino"], [3, "films de Marvel"], [3, "films d'horreur"], [3, "personnages de Star Wars"], [3, "personnages du Seigneur des anneaux"], [3, "personnages de Game of Thrones"], [3, "personnages de Friends"], [3, "séries françaises"], [3, "animateurs télé"], [3, "humoristes français"], [3, "footballeurs brésiliens"], [3, "joueurs de tennis"], [3, "pilotes de Formule 1"], [3, "clubs de foot anglais"], [3, "clubs de foot espagnols ou italiens"], [3, "vainqueurs de la Coupe du monde de foot"], [3, "marques de montres"], [3, "marques d'électroménager"], [3, "constructeurs d'avions ou compagnies aériennes"], [3, "mots en verlan"], [3, "expressions avec « chat »"], [3, "insultes du capitaine Haddock"], [3, "choses qu'on trouve dans une pharmacie"], [3, "plats de la cuisine du Sud-Ouest"], [3, "fromages au lait de chèvre"], [3, "cépages"], [3, "whiskies ou marques de whisky"], [3, "ingrédients d'une pizza"], [3, "ingrédients d'un cocktail"], [3, "races de chevaux"], [3, "champignons"], [3, "poissons d'eau douce"], [3, "félins"], [3, "singes ou primates"], [3, "oiseaux de proie"], [3, "planètes et lunes du système solaire"], [3, "éléments du tableau périodique"], [3, "os du corps humain"], [3, "organes du corps humain"], [3, "maladies"], [3, "langages de programmation"], [3, "applications sur un téléphone"], [3, "youtubeurs ou streamers français"], [3, "jeux de cartes"], [3, "termes de poker"], [3, "positions au rugby"], [3, "postes au football"], [3, "mots qui finissent par « -tion »"], [3, "mots qui commencent par « Z »"], [3, "prénoms qui commencent par « J »"], [3, "villes qui commencent par « M »"], [3, "pays qui commencent par « S »"], [3, "animaux qui commencent par « C »"], [3, "choses jaunes"], [3, "choses qui font du bruit"], [3, "choses qu'on ne prête jamais"], [3, "métiers qui n'existent plus"], [3, "personnages de Astérix"], [3, "personnages de Tintin"], [3, "personnages de Dragon Ball"], [3, "personnages de One Piece"], [3, "personnages de Pixar"], [3, "méchants de Disney"], [3, "chansons de l'Eurovision"], [3, "tubes de l'été"], [3, "stations de ski"], [3, "plages ou spots de surf"], [4, "capitales d'Amérique du Sud"], [4, "capitales d'Europe de l'Est"], [4, "pays sans accès à la mer"], [4, "pays qui ont un drapeau avec du vert"], [4, "villes des États-Unis (hors New York et Los Angeles)"], [4, "États américains"], [4, "préfectures françaises"], [4, "villes de plus de 100 000 habitants en France"], [4, "affluents de la Loire ou de la Seine"], [4, "châteaux de la Loire"], [4, "écrivains français"], [4, "poètes français"], [4, "peintres impressionnistes"], [4, "peintres de la Renaissance"], [4, "compositeurs de musique classique"], [4, "philosophes"], [4, "scientifiques célèbres"], [4, "inventions françaises"], [4, "dieux grecs"], [4, "dieux romains ou égyptiens"], [4, "empereurs romains"], [4, "reines célèbres"], [4, "batailles de Napoléon"], [4, "guerres célèbres"], [4, "films de Christopher Nolan"], [4, "films de Steven Spielberg"], [4, "films avec Louis de Funès"], [4, "films de Pixar"], [4, "films récompensés aux Oscars"], [4, "albums des Beatles ou chansons des Beatles"], [4, "chansons de Daft Punk"], [4, "chansons de Stromae"], [4, "membres de groupes de rap français"], [4, "Ballons d'or"], [4, "joueurs de NBA"], [4, "joueurs du XV de France"], [4, "vainqueurs du Tour de France"], [4, "champions du monde de F1"], [4, "stades de foot européens"], [4, "équipes de NBA"], [4, "marques de champagne"], [4, "vins de Bordeaux (appellations)"], [4, "bières belges"], [4, "fromages AOP"], [4, "plats de la cuisine indienne"], [4, "plats de la cuisine mexicaine"], [4, "desserts du monde"], [4, "pâtisseries françaises"], [4, "races de vaches"], [4, "races de moutons ou de chèvres"], [4, "arbres fruitiers"], [4, "plantes d'intérieur"], [4, "constellations"], [4, "unités de mesure"], [4, "termes de musique"], [4, "figures de skate"], [4, "mots anglais utilisés en français"], [4, "mots de plus de 4 syllabes"], [4, "palindromes"], [4, "personnages de Molière"], [4, "personnages de Shakespeare"], [4, "personnages des Misérables"], [5, "capitales d'Océanie ou des îles du Pacifique"], [5, "capitales d'Asie centrale"], [5, "pays dont le nom finit par « -stan »"], [5, "pays des Caraïbes"], [5, "villes d'Australie"], [5, "villes du Canada"], [5, "fleuves d'Afrique"], [5, "lacs dans le monde"], [5, "volcans"], [5, "sommets de plus de 4 000 mètres"], [5, "départements avec leur numéro"], [5, "anciens noms de pays"], [5, "monnaies du monde"], [5, "langues mortes ou rares"], [5, "alphabets ou systèmes d'écriture"], [5, "joueurs de l'OM de 1993"], [5, "vainqueurs de Roland-Garros"], [5, "médaillés olympiques français"], [5, "boxeurs célèbres"], [5, "jockeys ou chevaux de course célèbres"], [5, "entraîneurs de foot"], [5, "présidents américains"], [5, "Premiers ministres français"], [5, "papes"], [5, "explorateurs"], [5, "astronautes ou spationautes"], [5, "prix Nobel"], [5, "architectes"], [5, "sculpteurs"], [5, "réalisateurs de la Nouvelle Vague"], [5, "films de Hitchcock"], [5, "films de Kubrick"], [5, "acteurs ayant joué James Bond"], [5, "James Bond girls"], [5, "albums de Michael Jackson"], [5, "groupes de métal"], [5, "chanteurs d'opéra"], [5, "opéras"], [5, "ballets"], [5, "danses latines"], [5, "cépages blancs"], [5, "grands crus de Bourgogne"], [5, "whiskies écossais"], [5, "liqueurs"], [5, "sushis (types)"], [5, "variétés de pommes"], [5, "variétés de tomates"], [5, "races de chiens de chasse"], [5, "serpents venimeux"], [5, "requins"], [6, "capitales africaines commençant par « N » ou « B »"], [6, "pays qui touchent la Russie"], [6, "pays traversés par l'équateur"], [6, "villes qui ont accueilli les Jeux olympiques"], [6, "vainqueurs de la Ligue des champions"], [6, "vainqueurs de l'Euro de foot"], [6, "vainqueurs de la Coupe de France"], [6, "joueurs de l'équipe de France championne du monde 1998"], [6, "gardiens de but de l'équipe de France"], [6, "ministres de l'Économie français"], [6, "rois de France nommés Louis (avec le numéro)"], [6, "reines d'Angleterre"], [6, "dynasties chinoises"], [6, "pharaons"], [6, "batailles de la Seconde Guerre mondiale"], [6, "traités historiques"], [6, "œuvres de Victor Hugo"], [6, "romans de Zola"], [6, "pièces de Racine ou de Corneille"], [6, "tableaux de Picasso"], [6, "tableaux du Louvre"], [6, "symphonies célèbres"], [6, "lauréats du prix Goncourt"], [6, "Palmes d'or à Cannes"], [6, "films de Godard"], [6, "films de Kurosawa"], [6, "albums de Pink Floyd"], [6, "membres des Rolling Stones (anciens et actuels)"], [6, "chansons de Brassens"], [6, "chansons de Gainsbourg"], [6, "éléments chimiques avec leur symbole"], [6, "os de la main ou du pied"], [6, "muscles du corps humain"], [6, "hormones"], [6, "lois de la physique"], [6, "théorèmes de maths"], [6, "nombres premiers au-dessus de 50"], [6, "mots de plus de 15 lettres"], [6, "mots français d'origine arabe"], [6, "mots qui ont trois « e »"], [6, "appellations de Champagne ou du Jura"], [6, "fromages corses ou savoyards"], [6, "plats de la cuisine éthiopienne ou péruvienne"], [6, "cocktails à base de rhum"], [6, "poissons de mer comestibles"], [6, "papillons"], [6, "champignons vénéneux"], [6, "insectes qui piquent"], [6, "cétacés"]];
 const SEPT_ROUNDS = 5, SEPT_TIME = 7, SEPT_N = 30;
 // ordre de passage : chaque joueur 5 fois, mélangé, jamais deux fois de suite
+// construit tour par tour : chaque tour, tout le monde passe une fois dans un ordre mélangé,
+// et le premier d'un tour n'est jamais le dernier du tour d'avant (sauf s'il joue seul)
+function ordrePassage(players, rounds, total) {
+  const out = []; const n = players.length; if (!n) return out;
+  for (let k = 0; k < rounds; k++) {
+    const t = players.slice();
+    for (let i = t.length - 1; i > 0; i--) { const j = Math.floor(Math.random() * (i + 1)); [t[i], t[j]] = [t[j], t[i]]; }
+    if (n > 1 && out.length && t[0] === out[out.length - 1]) { const j = 1 + Math.floor(Math.random() * (n - 1)); [t[0], t[j]] = [t[j], t[0]]; }
+    out.push(...t);
+  }
+  return total ? out.slice(0, total) : out;
+}
 function septQueue(players, total) {
   const r = total ? Math.ceil(total / players.length) : SEPT_ROUNDS;
-  const all = []; players.forEach(id => { for (let i = 0; i < r; i++) all.push(id); });
-  for (let tries = 0; tries < 400; tries++) {
-    for (let i = all.length - 1; i > 0; i--) { const j = Math.floor(Math.random() * (i + 1)); [all[i], all[j]] = [all[j], all[i]]; }
-    if (players.length < 2 || all.every((id, i) => i === 0 || all[i - 1] !== id)) break;
-  }
-  return total ? all.slice(0, total) : all;
+  return ordrePassage(players, r, total);
 }
 // catégories : on évite celles déjà sorties récemment sur ce téléphone
 function septPick(n) { return pickFresh("7s", SEPT.length, n, "lostenebros-7s"); }
@@ -3979,12 +4054,7 @@ const OUINON_N = 15, OUINON_SIPS = 2;
 function onPick(n) { return pickFresh("on", OUINON.length, n, "lostenebros-on"); }
 // ordre de passage : 15 questions, tout le monde à tour de rôle mélangé, jamais deux fois de suite
 function onQueue(players) {
-  const all = []; const r = Math.ceil(OUINON_N / players.length); players.forEach(id => { for (let i = 0; i < r; i++) all.push(id); });
-  for (let tries = 0; tries < 400; tries++) {
-    for (let i = all.length - 1; i > 0; i--) { const j = Math.floor(Math.random() * (i + 1)); [all[i], all[j]] = [all[j], all[i]]; }
-    if (players.length < 2 || all.every((id, i) => i === 0 || all[i - 1] !== id)) break;
-  }
-  return all.slice(0, OUINON_N);
+  return ordrePassage(players, Math.ceil(OUINON_N / players.length), OUINON_N);
 }
 let onTimer = null;
 function onStop() { clearInterval(onTimer); onTimer = null; }
@@ -4024,12 +4094,7 @@ const DX_N = 15, DX_SIPS = 2;
 function dxPick(n) { return pickFresh("dx", DIX.length, n, "lostenebros-dx"); }
 // ordre de passage : 15 questions, tout le monde à tour de rôle mélangé, jamais deux fois de suite
 function dxQueue(players) {
-  const all = []; const r = Math.ceil(DX_N / players.length); players.forEach(id => { for (let i = 0; i < r; i++) all.push(id); });
-  for (let tries = 0; tries < 400; tries++) {
-    for (let i = all.length - 1; i > 0; i--) { const j = Math.floor(Math.random() * (i + 1)); [all[i], all[j]] = [all[j], all[i]]; }
-    if (players.length < 2 || all.every((id, i) => i === 0 || all[i - 1] !== id)) break;
-  }
-  return all.slice(0, DX_N);
+  return ordrePassage(players, Math.ceil(DX_N / players.length), DX_N);
 }
 let dxTimer = null;
 function dxStop() { clearInterval(dxTimer); dxTimer = null; }
@@ -4130,7 +4195,9 @@ function viewQuiz(p) {
   if (st.i >= n) {
     const fails = {}; (p.gamelles || []).forEach(g => { if (g.type === "quiz" && g.t >= st.t0) fails[g.p] = (fails[g.p] || 0) + 1; });
     return `<section class="sept"><h3>Quiz terminé</h3>
-      <ol class="board ten">${p.players.slice().sort((a, b) => (fails[a] || 0) - (fails[b] || 0)).map((id, i, arr) => `<li><span class="rank">${arr.findIndex(x => (fails[x] || 0) === (fails[id] || 0)) + 1}</span><span class="who">${esc(name(id))}</span><span class="val">${fails[id] || 0}<span class="unit"> ratés</span></span></li>`).join("")}</ol>
+      <p class="muted small">Classé comme le podium : le moins de gorgées bues gagne.</p>
+      ${(() => { const gor = gamelleCounts(p), pl = partiePlaces(p); // même règle que le podium
+        return `<ol class="board ten">${p.players.slice().sort((a, b) => (pl[a] || 99) - (pl[b] || 99) || name(a).localeCompare(name(b))).map(id => `<li><span class="rank">${pl[id] || "–"}</span><span class="who">${esc(name(id))}<br><small class="muted">${fails[id] || 0} raté${(fails[id] || 0) > 1 ? "s" : ""}</small></span><span class="val">${gor[id] || 0}<span class="unit"> gorg.</span></span></li>`).join("")}</ol>`; })()}
       <button class="btn primary block" data-act="mini-end">🏆 Voir le podium</button><button class="btn ghost block" data-act="mini-again">▶️ Rejouer une manche</button></section>`;
   }
   const who = st.queue[st.i]; const [d, q, ...ans] = QUIZ[st.qs[st.i]]; const ord = st.ord[st.i];
@@ -4400,6 +4467,18 @@ function ritCount(secs, onEnd) {
     else play(ui.rt.left <= 5 ? "tickhot" : "tick");
   }, 1000);
 }
+// la Bougie : le temps de chaque bougie est gardé dans la carte (c.bg), pour survivre à un retour au menu ou à un rechargement
+function ritDu(c) {
+  if (!ui.du) ui.du = c && c.bg && Array.isArray(c.bg.t) ? { t: c.bg.t.slice(), side: c.bg.side ? 1 : 0, run: false } : { t: [RIT_BOUGIE, RIT_BOUGIE], side: 0, run: false };
+  return ui.du;
+}
+function ritSaveBg() {
+  const d = ui.du, p0 = state.parties[ui.partieId]; if (!d || !p0 || !p0.rit || !p0.rit.cur || p0.rit.cur.mode !== "bougie" || p0.rit.cur.step !== "play") return;
+  const p = clone(p0); p.rit.cur.bg = { t: d.t.slice(), side: d.side }; ritSave(p);
+}
+// en quittant l'écran du duel : la bougie s'éteint (on la rallume en revenant)
+function ritPause() { ritStop(); const d = ui.du; if (d && d.run) { d.run = false; ritSaveBg(); } }
+window.addEventListener("pagehide", () => { try { if (ui.du && ui.du.run) ritSaveBg(); } catch (e) {} });
 function ritBougie() {
   ritStop();
   ritTimer = setInterval(() => {
@@ -4633,7 +4712,7 @@ function ritDuelView(r, head) {
   const qi = c.qs[c.k % c.qs.length]; const [, q, a] = DUEL[qi];
   const question = `<div class="onq duelq">${esc(q)}</div>${holdHTML("Maintiens pour voir la réponse", esc(a))}`;
   if (c.mode === "bougie") {
-    const d = ui.du || { t: [RIT_BOUGIE, RIT_BOUGIE], side: 0, run: false };
+    const d = ritDu(c);
     return `${head}<div class="candles">${[0, 1].map(k => `<div class="cd ${d.side === k ? "on" : ""}" id="cd-${k}" style="--h:${d.t[k] / RIT_BOUGIE};--tc:${r.teams[sides[k]].col}"><span class="wick">${d.t[k] > 0 ? "🔥" : "💨"}</span><span class="wax-c"></span><b class="num">${Math.ceil(d.t[k])}</b><span class="nm">${esc(k ? B : A)}</span></div>`).join("")}</div>
       <p class="kick">À ${esc(d.side ? B : A)} de répondre</p>${question}
       ${d.run ? `<div class="row2"><button class="btn ok" data-act="rit-bg" data-ok="1">✅ Bonne réponse</button><button class="btn ko" data-act="rit-bg" data-ok="0">❌ Faux / passe</button></div>`
@@ -4834,11 +4913,13 @@ function ritAction(act, el) {
     case "rit-duel-next": ritLoadDuel(c, c.di + 1); ui.du = null; play("buzz"); break;
     case "rit-champ0": case "rit-champ1": { const k = +act.slice(-1); c.ch[k] = c.ch[k] === el.dataset.id ? null : el.dataset.id; break; }
     case "rit-duel-mode": c.step = "mode"; play("buzz"); break;
-    case "rit-duel-go": c.step = "play"; ui.du = { t: [RIT_BOUGIE, RIT_BOUGIE], side: Math.random() < 0.5 ? 0 : 1, run: false }; break;
-    case "rit-bg-start": ui.du.run = true; ritBougie(); render(); return;
+    case "rit-duel-go": c.step = "play"; ui.du = { t: [RIT_BOUGIE, RIT_BOUGIE], side: Math.random() < 0.5 ? 0 : 1, run: false }; c.bg = { t: ui.du.t.slice(), side: ui.du.side }; break;
+    case "rit-bg-start": { if (c.mode !== "bougie" || c.step !== "play") return; const d = ritDu(c); d.run = true; ritBougie(); render(); return; }
     case "rit-bg": {
+      const d = ritDu(c); if (!d.run) return;
       const ok = el.dataset.ok === "1"; c.k++; duelMore(c);
-      if (ok) { ui.du.side = 1 - ui.du.side; play("win7"); } else play("lose7");
+      if (ok) { d.side = 1 - d.side; play("win7"); } else play("lose7");
+      c.bg = { t: d.t.slice(), side: d.side };
       break;
     }
     case "rit-rope": {
@@ -4983,7 +5064,7 @@ function pxSoireeData(sid) {
     if (p.places && Object.keys(p.places).length) o.l = remap(p.places);
     if (p.points && Object.keys(p.points).length) o.o = remap(p.points);
     if ((p.gamelles || []).length) o.x = p.gamelles.map(x => { const y = Object.assign({}, x); delete y.t; y.p = I(x.p); return y; });
-    if (p.rit) o.r = { w: p.rit.win, n: (p.rit.teams || []).map(t => t.name) };
+    if (p.rit) { o.r = { w: p.rit.win, n: (p.rit.teams || []).map(t => t.name) }; if ((p.rit.teams || []).every(t => Array.isArray(t.ids))) o.r.i = p.rit.teams.map(t => t.ids.map(I)); }
     if (p.rapide) o.f = 1;
     return o;
   });
@@ -5053,6 +5134,7 @@ function pxSheet(sh) {
   return "";
 }
 function pxOpen(kind, d) {
+  if (kind !== "j") d = pxClean(d);
   if (kind === "j") { ui.sheet = { step: "px-qrj", data: d }; render(); return; }
   const dup = Object.values(state.soirees).some(s => s.id === d.i || s.src === d.i);
   const o = pxOwner(); let me = null;
@@ -5060,8 +5142,43 @@ function pxOpen(kind, d) {
     if (me == null) { const nm = state.players[o.pid].name.toLowerCase(); d.P.forEach(([pn], i) => { if (String(pn).toLowerCase() === nm) me = i; }); } }
   ui.tab = "soiree"; ui.sheet = { step: "px-imp", data: d, dup, me }; render();
 }
+/* tout ce qui arrive d'un QR, d'un lien ou d'internet est nettoyé : des nombres pour les stats, du texte court pour le reste */
+const pxN = v => { const n = Number(v); return isFinite(n) ? n : 0; };
+const pxS = (v, max) => String(v == null ? "" : v).slice(0, max || 60);
+const pxK = v => String(v == null ? "" : v).replace(/[^\w-]/g, "").slice(0, 30);
+function pxNums(o) { const r = {}; Object.entries(o && typeof o === "object" ? o : {}).forEach(([k, v]) => { if (/^\d+$/.test(k)) r[k] = pxN(v); }); return r; }
+function pxClean(d) {
+  d = d && typeof d === "object" ? d : {};
+  const P = (Array.isArray(d.P) ? d.P : []).slice(0, 60).map(x => { x = Array.isArray(x) ? x : [x]; return x[1] ? [pxS(x[0], 24) || "?", pxK(x[1])] : [pxS(x[0], 24) || "?"]; });
+  const nP = P.length, idx = i => { i = Math.floor(pxN(i)); return i >= 0 && i < nP ? i : null; };
+  const A = (Array.isArray(d.A) ? d.A : []).slice(0, 200).map(a => {
+    a = a && typeof a === "object" ? a : {};
+    const o = { g: pxK(a.g), p: (Array.isArray(a.p) ? a.p : []).map(idx).filter(i => i != null) };
+    if (a.st) o.st = pxK(a.st);
+    if (a.l) o.l = pxNums(a.l);
+    if (a.o) o.o = pxNums(a.o);
+    if (Array.isArray(a.x)) o.x = a.x.slice(0, 500).map(x => { x = x && typeof x === "object" ? x : {}; const y = { p: idx(x.p), type: pxK(x.type) }; if (x.g != null) y.g = pxN(x.g); if (x.n != null) y.n = pxN(x.n); return y; }).filter(y => y.p != null);
+    if (a.r && typeof a.r === "object") {
+      const n = (Array.isArray(a.r.n) ? a.r.n : []).slice(0, 6).map(t => pxS(t, 40));
+      o.r = { w: a.r.w == null || !(pxN(a.r.w) >= 0 && pxN(a.r.w) < n.length) ? null : Math.floor(pxN(a.r.w)), n };
+      if (Array.isArray(a.r.i)) o.r.i = n.map((_, k) => (Array.isArray(a.r.i[k]) ? a.r.i[k] : []).map(idx).filter(i => i != null));
+    }
+    if (a.f) o.f = 1;
+    return o;
+  });
+  const T = (Array.isArray(d.T) ? d.T : []).slice(0, 60).map(t => { t = t && typeof t === "object" ? t : {}; const r = { k: pxK(t.k), e: pxS(t.e, 16), t: pxS(t.t, 60), why: pxS(t.why, 200), who: (Array.isArray(t.who) ? t.who : []).map(idx).filter(i => i != null) }; if (t.anim) r.anim = pxK(t.anim); return r; });
+  const n = Math.floor(pxN(d.n)); const ds = v => v == null ? undefined : pxS(v, 40);
+  return { v: d.v, i: pxS(d.i, 60), d: ds(d.d) || new Date().toISOString().slice(0, 10), c: ds(d.c), n: n > 0 && n <= nP ? n : nP, P, A, T };
+}
+function pxExtClean(s, ss) {
+  s = s && typeof s === "object" ? s : {};
+  const x = { so: pxN(s.so), pa: pxN(s.pa), pt: pxN(s.pt), ga: pxN(s.ga), cs: pxN(s.cs), w: pxN(s.w),
+    ti: (Array.isArray(s.ti) ? s.ti : []).slice(0, 40).map(t => Array.isArray(t) ? [pxS(t[0], 16), pxS(t[1], 60), pxN(t[2])] : null).filter(Boolean) };
+  if (ss && typeof ss === "object") x.ss = { k: pxS(ss.k, 20), so: pxN(ss.so), pt: pxN(ss.pt), w: pxN(ss.w), ga: pxN(ss.ga) };
+  return x;
+}
 function pxImport(d, meIdx, opt) {
-  opt = opt || {};
+  opt = opt || {}; d = pxClean(d);
   const o = pxOwner(); const writes = []; const now = new Date().toISOString(); const map = [];
   const list = () => Object.values(state.players);
   d.P.forEach(([n, g], i) => {
@@ -5085,7 +5202,7 @@ function pxImport(d, meIdx, opt) {
     const id = uid(); const p = { id, soireeId: sid, game: G[a.g] ? a.g : "barbu", players: a.p.map(M), gamelles: (a.x || []).map(x => Object.assign({}, x, { p: M(x.p) })),
       places: R(a.l), points: R(a.o), status: a.st || "done", imported: 1 };
     if (a.f) p.rapide = 1;
-    if (a.r) p.rit = { win: a.r.w, teams: a.r.n.map(name => ({ name })) };
+    if (a.r) p.rit = { win: a.r.w, teams: a.r.n.map((name, k) => a.r.i ? { name, ids: (a.r.i[k] || []).map(M) } : { name }) };
     if (p.status === "live") return; // une partie pas finie ne voyage pas
     state.parties[id] = p; writes.push(["parties", id]);
   });
@@ -5095,9 +5212,10 @@ function pxImport(d, meIdx, opt) {
 }
 function pxAddScanned(d) {
   const list = Object.values(state.players);
-  let pl = list.find(p => p.gid === d.g) || list.find(p => p.name.toLowerCase() === String(d.n).toLowerCase() && (!p.gid || p.gid === d.g));
+  d = Object.assign({}, d, { n: pxS(d.n, 24).trim() || "?", g: d.g ? pxK(d.g) : undefined });
+  let pl = (d.g && list.find(p => p.gid === d.g)) || list.find(p => p.name.toLowerCase() === String(d.n).toLowerCase() && (!p.gid || p.gid === d.g));
   const rec = pl ? Object.assign({}, pl) : { id: uid(), name: d.n, created: new Date().toISOString() };
-  rec.gid = rec.gid || d.g; rec.hidden = false; rec.ext = Object.assign({}, d.s || {}, { at: Date.now(), ss: d.ss });
+  rec.gid = rec.gid || d.g; rec.hidden = false; rec.ext = Object.assign(pxExtClean(d.s, d.ss), { at: Date.now() });
   put("players", rec.id, rec);
   const s = activeSoiree();
   if (s) { if (!s.playerIds.includes(rec.id)) put("soirees", s.id, Object.assign({}, s, { playerIds: s.playerIds.concat(rec.id) })); }
@@ -5106,11 +5224,11 @@ function pxAddScanned(d) {
 }
 function pxExtHTML(id) {
   const pl = state.players[id]; const x = pl && pl.ext; if (!x) return "";
-  return `<h4 class="sub">📱 Depuis qu'il joue <span class="muted small">(son QR, ${esc(new Date(x.at).toLocaleDateString("fr-FR", { day: "numeric", month: "short" }))})</span></h4>
-    <div class="stat"><div><b>${x.so || 0}</b><span>soirées</span></div><div><b>${x.pt || 0}</b><span>points</span></div><div><b>${x.w || 0}</b><span>victoires</span></div>
-    <div><b>${x.ga || 0}</b><span>châtiments</span></div><div><b>${x.cs || 0}</b><span>culs secs</span></div><div><b>${x.pa || 0}</b><span>parties</span></div></div>
-    ${x.ss && typeof saisonOf === "function" && x.ss.k === saisonOf(saisonNow()).k && x.ss.so ? `<p class="small">${saisonOf(saisonNow()).e} Cette saison : ${x.ss.so} soirée${x.ss.so > 1 ? "s" : ""}, ${x.ss.pt} pts, ${x.ss.w} victoire${x.ss.w > 1 ? "s" : ""}, ${x.ss.ga} gorg. de Ténèbres</p>` : ""}
-    ${(x.ti || []).length ? `<div class="row">${x.ti.map(([e, t, n]) => `<span class="chip on">${esc(e)} ${esc(t)}${n > 1 ? ` ×${n}` : ""}</span>`).join("")}</div>` : ""}`;
+  return `<h4 class="sub">📱 Depuis qu'il joue <span class="muted small">(son QR, ${esc(new Date(pxN(x.at)).toLocaleDateString("fr-FR", { day: "numeric", month: "short" }))})</span></h4>
+    <div class="stat"><div><b>${pxN(x.so)}</b><span>soirées</span></div><div><b>${pxN(x.pt)}</b><span>points</span></div><div><b>${pxN(x.w)}</b><span>victoires</span></div>
+    <div><b>${pxN(x.ga)}</b><span>châtiments</span></div><div><b>${pxN(x.cs)}</b><span>culs secs</span></div><div><b>${pxN(x.pa)}</b><span>parties</span></div></div>
+    ${x.ss && typeof x.ss === "object" && typeof saisonOf === "function" && x.ss.k === saisonOf(saisonNow()).k && pxN(x.ss.so) ? `<p class="small">${esc(saisonOf(saisonNow()).e)} Cette saison : ${pxN(x.ss.so)} soirée${pxN(x.ss.so) > 1 ? "s" : ""}, ${pxN(x.ss.pt)} pts, ${pxN(x.ss.w)} victoire${pxN(x.ss.w) > 1 ? "s" : ""}, ${pxN(x.ss.ga)} gorg. de Ténèbres</p>` : ""}
+    ${Array.isArray(x.ti) && x.ti.length ? `<div class="row">${x.ti.filter(Array.isArray).map(([e, t, n]) => `<span class="chip on">${esc(pxS(e, 16))} ${esc(pxS(t))}${pxN(n) > 1 ? ` ×${pxN(n)}` : ""}</span>`).join("")}</div>` : ""}`;
 }
 function pxMeHTML(id) {
   const o = pxOwner();
@@ -5127,6 +5245,7 @@ async function pxScanOpen() {
     <div class="px-panel"><b>Scanne les QR joueurs</b><p class="small px-msg">Chacun ouvre « Mon QR joueur » dans l'onglet All-time.</p><div class="row px-got"></div><button class="btn primary block" data-act="px-scan-stop">Terminé</button></div>`;
   document.body.appendChild(div);
   pxCam = { div, got: [], last: "", lastAt: 0 };
+  if (typeof histSync === "function") histSync();
   const msg = t => { const m = div.querySelector(".px-msg"); if (m) m.textContent = t; };
   try {
     const stream = await navigator.mediaDevices.getUserMedia({ video: { facingMode: { ideal: "environment" } }, audio: false });
@@ -5219,7 +5338,7 @@ document.addEventListener("submit", e => {
 });
 function pxBoot() {
   const m = location.hash.match(/^#([jsc])=([A-Za-z0-9_-]+)/); if (!m) return;
-  try { history.replaceState(null, "", location.pathname + location.search); } catch (e) {}
+  try { history.replaceState(history.state, "", location.pathname + location.search); } catch (e) {}
   if (m[1] === "c") { if (typeof pfJoinOpen === "function") pfJoinOpen(m[2]); return; }
   pxUnpack(m[2]).then(d => pxOpen(m[1], d)).catch(() => toast("Ce lien est abîmé : redemande le QR."));
 }
@@ -5472,6 +5591,7 @@ function renderOnce(key, dur, compose, rate) {
     off.oncomplete = e => ok(norm(e.renderedBuffer)); const p = off.startRendering(); if (p && p.then) p.then(x => ok(norm(x)), ko); });
 }
 function play(key, dur, compose, rate) {
+  if (typeof soundOn !== "undefined" && !soundOn) { stopMusic(.2); return; } // son coupé dans l'appli : pas de musique non plus
   const L = live(); if (!L) return; stopMusic(.35);
   const g = L.createGain(); g.connect(L.destination); const me = CUR = { g, s: null };
   renderOnce(key, dur, compose, rate).then(buf => { if (CUR !== me) return; const s = L.createBufferSource(); s.buffer = buf; s.connect(g); s.start(); me.s = s; }).catch(() => {});
@@ -5892,7 +6012,7 @@ function troStats(id, exclude) {
   const run = t => { let best = 0, r = 0; mine.forEach(s => { r = has(s, t) ? r + 1 : 0; best = Math.max(best, r); }); return best; };
   const wonGames = new Set(); let w = 0, rit = 0;
   ps.forEach(p => { if (p.status !== "done" || p.rapide) return;
-    if (p.rit) { if (p.rit.win != null && p.rit.teams[p.rit.win].ids.includes(id)) rit++; return; }
+    if (p.rit) { const wt = p.rit.win != null && (p.rit.teams || [])[p.rit.win]; if (wt && Array.isArray(wt.ids) && wt.ids.includes(id)) rit++; return; } // Rituel importé d'une ancienne version : équipes sans joueurs, on ne sait pas qui a gagné
     if ((p.players || []).includes(id) && (p.places || {})[id] === 1) { w++; wonGames.add(p.game); } });
   const funSet = new Set(); mine.forEach(s => (s.titles || []).forEach(t => { if (t.k === "fun" && (t.who || []).includes(id)) funSet.add(t.t); }));
   // Joueur du mois : les mois terminés seulement
@@ -6961,6 +7081,21 @@ function checkLiveTitles(sid) {
   fresh.forEach(announce);
 }
 
+/* taps fantômes : le 2e tap d'un double tap tombe sur ce qui vient d'apparaître sous le doigt.
+   Juste après un tap (ou un « Ajouter »), on ignore un tap sur un AUTRE bouton, et le même tap répété
+   sur les boutons qui ne se tapent qu'une fois (annuler, confirmer, lancer…). Les compteurs restent rapides. */
+const GHOST_MS = 350;
+const GHOST_ONCE = /^(undo|del-player|end|end-yes|end-ok|cancel|cancel-yes|close|close-yes|confirm-no|new-soiree|pl-ok|start|open|back|again|again-edit|mini-again|mini-end|edit-players|manage|rename|type|pile-ok|px-import|px-ce-del|px-scan|px-soiree|recap|rit-next|rit-go|rit-play|rit-quit|rit-end|rit-dist-ok|rit-duel-go|rit-duel-next|rit-duel-mode|rit-fch-ok|rit-bg-start|rit-bg|rit-rope|rit-bet-ok|rit-flip|rit-pacte|rit-maudit)$|-undo$|-yes$|-close$|-new$|-next$|-show$|-skip$|-go$|-end$/;
+let ghostLast = { t: -1e9, act: "" };
+document.addEventListener("submit", () => { ghostLast = { t: performance.now(), act: "submit" }; }, true);
+document.addEventListener("click", e => {
+  const el = e.target.closest && e.target.closest("[data-act]"); if (!el) return;
+  const act = el.dataset.act, now = performance.now();
+  if (act === "sheet-close" && el.classList.contains("sheet-bg") && e.target !== el) return;
+  if (!e.isTrusted) return;
+  if (now - ghostLast.t < GHOST_MS && (act !== ghostLast.act || GHOST_ONCE.test(act))) { e.stopImmediatePropagation(); e.preventDefault(); return; }
+  ghostLast = { t: now, act };
+}, true);
 document.addEventListener("click", e => {
   const el = e.target.closest("[data-act]"); if (!el) return;
   const act = el.dataset.act;
@@ -7133,10 +7268,10 @@ document.addEventListener("click", e => {
       { const np = { id, soireeId: s.id, game: sh.game, players: order, gamelles: [], places: {}, status: "live", started: Date.now() }; if (G[sh.game].mini) miniInit(np); if (sh.game === "rituel") ritInit(np); put("parties", id, np); }
       keepAwake(); return;
     }
-    case "sound": soundOn = !soundOn; try { localStorage.setItem("lostenebros-son", soundOn ? "1" : "0"); } catch (e) {} if (soundOn) play("bouffon"); break;
+    case "sound": soundOn = !soundOn; try { localStorage.setItem("lostenebros-son", soundOn ? "1" : "0"); } catch (e) {} if (soundOn) play("bouffon"); else if (typeof TroMusic !== "undefined" && TroMusic.stopMusic) TroMusic.stopMusic(.2); break;
     case "open": ui.partieId = el.dataset.id; ui.confirm = null; keepAwake(); break;
     case "back": {
-      ritStop(); ritTiltOff();
+      ritPause(); ritTiltOff();
       // une course PMU relancée mais pas jouée (aucun gagnant) disparaît quand on quitte
       const p = state.parties[ui.partieId]; if (p && p.game === "pmu" && p.status === "live" && !Object.keys(p.places || {}).length) remove("parties", p.id);
       ui.partieId = null; ui.confirm = null; break;
@@ -7177,7 +7312,7 @@ document.addEventListener("click", e => {
     case "confirm-no": ui.confirm = null; break;
     case "close": ui.confirm = "close"; break;
     case "close-yes": {
-      const live = partiesOf(s.id).find(p => p.status === "live"); if (live) remove("parties", live.id);
+      const live = partiesOf(s.id).find(p => p.status === "live"); if (live) finirEnCours(live);
       const titles = computeTitles(s.id);
       ui.endSoiree = s.id; ui.confirm = null; ui.partieId = null;
       put("soirees", s.id, Object.assign({}, s, { closed: true, titles, closedAt: new Date().toISOString() }));
