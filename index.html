@@ -3054,6 +3054,19 @@ async function fbPremiereFois(base) {
   saveDirty();
   try { localStorage.setItem(FB_INIT, FB_GROUPE); } catch (e) {}
 }
+// Connexion anonyme : chaque téléphone reçoit un identifiant invisible, exigé par les règles de la base.
+// Si elle n'est pas encore activée dans Firebase (ou sans réseau), on continue sans : rien ne casse.
+async function fbAuth(V) {
+  try {
+    if (!firebase.auth) await fbScript(V + "firebase-auth-compat.js");
+    const auth = firebase.auth();
+    if (auth.currentUser) return;
+    await Promise.race([
+      new Promise(ok => { const off = auth.onAuthStateChanged(u => { off(); ok(u); }); }).then(u => u || auth.signInAnonymously()),
+      new Promise(ok => setTimeout(ok, 6000)),
+    ]);
+  } catch (e) {}
+}
 async function fbDb() {
   if (!FB_CONF || !FB_CONF.projectId) return null;
   try {
@@ -3063,6 +3076,7 @@ async function fbDb() {
     // une 2e tentative (réseau revenu) réutilise l'appli Firebase déjà créée
     const fs = FB_FS || firebase.firestore(firebase.apps && firebase.apps.length ? firebase.app() : firebase.initializeApp(FB_CONF));
     FB_FS = fs;
+    await fbAuth(V);
     const base = fs.collection("groupes").doc(FB_GROUPE);
     // l'appli relance d'elle-même sur "unavailable" ; aucune erreur réseau ne doit la passer en lecture seule
     const err = e => { const x = new Error((e && e.message) || "synchro"); x.code = "unavailable"; return x; };
