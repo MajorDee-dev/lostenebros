@@ -2986,7 +2986,7 @@ function listen(c) {
       const id = key.slice(i + 1);
       if (state[c][id]) next[id] = state[c][id]; else delete next[id];
     }
-    state[c] = next; saveLocal(); render();
+    state[c] = next; saveLocal(); render(); pxDedupSoon();
   }, () => { setTimeout(() => listen(c), 3000); });
 }
 
@@ -5173,7 +5173,13 @@ let pxInstallEvt = null;
 window.addEventListener("beforeinstallprompt", e => { e.preventDefault(); pxInstallEvt = e; });
 
 function pxOwner() {
-  try { const o = JSON.parse(localStorage.getItem(PX_MOI) || "null"); if (o && state.players[o.pid]) return o; } catch (e) {}
+  try {
+    const o = JSON.parse(localStorage.getItem(PX_MOI) || "null"); if (!o) return null;
+    if (state.players[o.pid]) return o;
+    // son joueur a été fusionné avec un doublon sur un autre téléphone : on le retrouve par son profil
+    const pl = o.g && Object.values(state.players).find(p => p.gid === o.g);
+    if (pl) { const n = { g: o.g, pid: pl.id }; localStorage.setItem(PX_MOI, JSON.stringify(n)); return n; }
+  } catch (e) {}
   return null;
 }
 function pxSetOwner(pl) {
@@ -5367,6 +5373,9 @@ function pxImport(d, meIdx, opt) {
     state.players[rec.id] = rec; writes.push(["players", rec.id]); map[i] = rec.id;
     if (i === meIdx) pxSetOwner(rec);
   });
+  // la soirée elle-même est déjà sur ce téléphone (même groupe) : on ne garde que le lien avec le profil, pas de copie
+  const orig = state.soirees[d.i];
+  if (orig && !orig.imported) { saveLocal(); writes.forEach(([c, id]) => mark(c, id, "put")); if (!opt.silent) ui.sheet = { step: "px-done" }; render(); return; }
   const M = i => map[i]; const R = o2 => { const r = {}; Object.entries(o2 || {}).forEach(([k, v]) => r[M(+k)] = v); return r; };
   const sid = uid();
   state.soirees[sid] = { id: sid, src: d.i, date: d.d, playerIds: d.P.slice(0, d.n || d.P.length).map((_, i) => M(i)),
@@ -6876,6 +6885,48 @@ function gdAction(act, el) {
   }
 }
 
+/* ---------- Doublons : une soirée importée (QR de fin, profils) alors que l'originale est déjà dans la base du groupe ----------
+   Cas réel (22/10) : un téléphone tout neuf ouvre le QR de fin avant que la synchro ait chargé le groupe.
+   L'import recrée la soirée et ses joueurs, puis la synchro envoie ces copies à tout le monde.
+   Ici : la copie disparaît dès que l'originale est là, et les joueurs créés par la copie rejoignent les vrais
+   (le profil en ligne passe sur le vrai joueur). */
+let pxDedupT = null;
+function pxDedupSoon() { clearTimeout(pxDedupT); pxDedupT = setTimeout(pxDedup, 1500); }
+function pxRefs() {
+  const used = new Set();
+  Object.values(state.soirees).forEach(s => (s.playerIds || []).forEach(id => used.add(id)));
+  Object.values(state.parties).forEach(p => {
+    (p.players || []).forEach(id => used.add(id)); (p.gamelles || []).forEach(g => used.add(g.p));
+    if (p.rit) (p.rit.teams || []).forEach(t => (t.ids || []).forEach(id => used.add(id)));
+  });
+  return used;
+}
+function pxDedup() {
+  if (!state || !state.soirees) return;
+  const S = Object.values(state.soirees); const drop = []; const times = new Set();
+  // 1. copie dont l'originale est là, ou plusieurs copies de la même soirée : on garde l'originale, sinon la copie la plus récente
+  const bySrc = {};
+  S.filter(s => s.imported && s.src && s.src !== s.id).forEach(s => (bySrc[s.src] = bySrc[s.src] || []).push(s));
+  Object.entries(bySrc).forEach(([src, list]) => {
+    const orig = state.soirees[src];
+    const keep = orig && !orig.imported ? null : list.slice().sort((a, b) => String(b.imported).localeCompare(String(a.imported)))[0];
+    list.forEach(s => { if (s !== keep) drop.push(s); });
+  });
+  if (!drop.length) return;
+  drop.forEach(s => { times.add(s.imported); Object.values(state.parties).filter(p => p.soireeId === s.id).forEach(p => remove("parties", p.id)); remove("soirees", s.id); });
+  // 2. les joueurs créés par ces copies et qui ne servent plus nulle part rejoignent leur jumeau (même profil, ou même nom)
+  const used = pxRefs(); let o = null; try { o = JSON.parse(localStorage.getItem(PX_MOI) || "null"); } catch (e) {}
+  Object.values(state.players).filter(p => times.has(p.created) && !used.has(p.id)).forEach(p => {
+    const k = pxNorm(p.name);
+    const twins = Object.values(state.players).filter(q => q.id !== p.id && used.has(q.id));
+    const twin = (p.gid && twins.find(q => q.gid === p.gid)) || twins.find(q => pxNorm(q.name) === k && (!p.gid || !q.gid || q.gid === p.gid));
+    if (!twin) return;
+    if (p.gid && !twin.gid) put("players", twin.id, Object.assign({}, twin, { gid: p.gid, hidden: false }));
+    if (o && o.pid === p.id) pxSetOwner(Object.assign({}, twin, { gid: twin.gid || p.gid }));
+    remove("players", p.id);
+  });
+}
+
 /* Sons fabriqués dans le navigateur (aucun fichier) */
 let actx = null;
 function audio() {
@@ -7588,6 +7639,7 @@ loadLocal();
 render();
 connect();
 pxBoot();
+pxDedupSoon();
 // Écran toujours allumé tant qu'une soirée est en cours (si le téléphone le permet)
 let wakeLock = null;
 async function keepAwake() {
