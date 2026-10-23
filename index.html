@@ -3253,7 +3253,11 @@ async function pfOpen(id) {
     const gids = Object.keys(doc.data().m || {});
     const docs = await Promise.all(gids.map(g => pfProfils().doc(g).get().catch(() => null)));
     if (!ui.sheet || ui.sheet.id !== id) return;
-    ui.sheet.n = doc.data().n; ui.sheet.rows = docs.filter(d => d && d.exists && !d.data().deleted).map(d => Object.assign({ g: d.id }, d.data())); render();
+    let rows = docs.filter(d => d && d.exists && !d.data().deleted).map(d => Object.assign({ g: d.id }, d.data()));
+    // les stats viennent des soirées en ligne ; le résumé envoyé par chaque téléphone ne sert que si elles n'ont pas pu se charger
+    try { const st = pfStatsDe(await pfSoireesDe(rows.map(r => r.g)), rows.map(r => r.g)); rows = rows.map(r => Object.assign({}, r, st[r.g])); } catch (e) {}
+    if (!ui.sheet || ui.sheet.id !== id) return;
+    ui.sheet.n = doc.data().n; ui.sheet.rows = rows; render();
   } catch (e) { if (ui.sheet && ui.sheet.id === id) { ui.sheet.err = 1; render(); } }
 }
 async function pfCreate(n) {
@@ -3314,7 +3318,7 @@ function pfSheet(sh, box, close) {
       body = `${sa ? `<div class="seg scope"><button class="l ${sh.sc === "saison" ? "on" : ""}" data-act="px-ce-sc" data-v="saison">${esc(sa.nom)}</button><button class="l ${sh.sc === "all" ? "on" : ""}" data-act="px-ce-sc" data-v="all">Depuis le début</button></div>` : ""}
         <div class="row statchips">${PF_STATS.map(([k, l]) => `<button class="chip ${sh.k === k ? "on" : ""}" data-act="px-ce-k" data-v="${k}">${l}</button>`).join("")}</div>
         <ol class="pf-board">${rows.map((r, i) => { const v = val(r); if (v !== prev) { rk = i + 1; prev = v; } return `<li class="${r.g === me.gid ? "me" : ""}"><i>${rk}</i><span>${esc(r.n)}</span><b class="num">${v}</b></li>`; }).join("")}</ol>
-        <p class="muted small">${rows.length} membre${rows.length > 1 ? "s" : ""}. Les stats de chacun se mettent à jour quand il ouvre l'appli.</p>`;
+        <p class="muted small">${rows.length} membre${rows.length > 1 ? "s" : ""}. Toutes les soirées des membres comptent, où qu'elles aient été jouées.</p>`;
     }
     return box("Cercle", `<h3>${esc(sh.n || "Cercle")}</h3>${body}
       <button class="btn block" data-act="px-ce-qr" data-id="${esc(sh.id)}">Inviter (QR du cercle)</button>
@@ -3402,6 +3406,41 @@ function pfAmiPick(g) {
   put("players", rec.id, rec);
   if (!(ui.newSoireePlayers || []).includes(rec.id)) ui.newSoireePlayers = (ui.newSoireePlayers || []).concat(rec.id);
   render();
+}
+/* ---------- Classement d'un cercle calculé à partir des soirées en ligne (2026-10-23) ----------
+   Une soirée finie n'importe où, avec un membre relié à son profil, compte tout de suite pour lui,
+   même s'il n'ouvre pas son appli. Les stats sont recalculées ici avec les mêmes règles que l'appli. */
+async function pfSoireesDe(gids) {
+  const out = {};
+  for (let i = 0; i < gids.length; i += 30) {
+    const snap = await pfColl().where("g", "array-contains-any", gids.slice(i, i + 30)).get();
+    snap.docs.forEach(doc => { try { out[doc.id] = pxClean(JSON.parse(doc.data().j)); } catch (e) {} });
+  }
+  return Object.values(out);
+}
+function pfStatsDe(list, gids) {
+  const S = { players: {}, soirees: {}, parties: {}, records: state.records };
+  list.forEach(d => {
+    if (!d.i || S.soirees[d.i]) return;
+    const M = d.P.map(([n, g], i) => { const id = g && !pfIsDead(g) ? "g:" + g : "x:" + d.i + ":" + i; if (!S.players[id]) S.players[id] = { id, name: n }; return id; });
+    const R = o2 => { const r = {}; Object.entries(o2 || {}).forEach(([k, v]) => { if (M[+k]) r[M[+k]] = v; }); return r; };
+    S.soirees[d.i] = { id: d.i, date: d.d, playerIds: M.slice(0, d.n || M.length), closed: true, closedAt: d.c, titles: (d.T || []).map(t => Object.assign({}, t, { who: t.who.map(i => M[i]) })) };
+    d.A.forEach((a, k) => {
+      if (a.st === "live") return;
+      const p = { id: d.i + ":" + k, soireeId: d.i, game: G[a.g] ? a.g : "barbu", players: a.p.map(i => M[i]), gamelles: (a.x || []).map(x => Object.assign({}, x, { p: M[x.p] })), places: R(a.l), points: R(a.o), status: a.st || "done", imported: 1 };
+      if (a.f) p.rapide = 1;
+      if (a.r) p.rit = { win: a.r.w, teams: a.r.n.map((name, j) => a.r.i ? { name, ids: (a.r.i[j] || []).map(i => M[i]) } : { name }) };
+      S.parties[p.id] = p;
+    });
+  });
+  // les fonctions de stats lisent « state » : on leur prête ces soirées le temps du calcul
+  const keep = {}; Object.keys(state).forEach(k => { keep[k] = state[k]; });
+  const res = {};
+  try {
+    Object.assign(state, S);
+    gids.forEach(g => { const id = "g:" + g; const a = pxSummary(id); delete a.ti; res[g] = { a, s: typeof saisonSummary === "function" ? saisonSummary(id) : null }; });
+  } finally { Object.assign(state, keep); }
+  return res;
 }
 
 /* ---------- Chaque téléphone garde ses soirées (2026-10-23) ----------
@@ -3688,7 +3727,7 @@ function viewNewSoiree() {
     <h3>Ce soir, qui part dans les ténèbres ?</h3>
     <p class="muted small">Touche les joueurs présents ou ajoute-les, puis lance la soirée.</p>
     ${all.length ? `<div class="row">${all.map(p => `<button class="chip ${sel.has(p.id) ? "on" : ""}" data-act="pick" data-id="${p.id}" aria-pressed="${sel.has(p.id)}">${esc(p.name)}</button>`).join("")}</div>` : `<div class="empty">Aucun joueur pour l'instant. Ajoute le premier ci-dessous.</div>`}
-    ${pfAmisHTML(sel)}
+    ${pfAmisHTML(sel)}${pxCodeHTML()}
     ${canWrite ? addPlayerForm("new") + `<button class="btn block scanbtn" data-act="px-scan">📷 Scanner les QR des joueurs</button>` : ""}
     ${all.length && canWrite ? `<button class="linkbtn" data-act="manage">Renommer ou supprimer un joueur</button>` : ""}
     <button class="btn primary block" data-act="new-soiree" ${sel.size < 2 || !canWrite ? "disabled" : ""}>Lancer la soirée (${sel.size} joueurs)</button>
@@ -5327,6 +5366,11 @@ function pxInstalled() { return (window.matchMedia && matchMedia("(display-mode:
 function pxInstallHTML() {
   if (!pxIsSite() || pxInstalled()) return "";
   const ios = /iPhone|iPad|iPod/.test(navigator.userAgent);
+  // sur iPhone, l'appli installée ne voit pas ce que Safari a gardé : on emporte son profil par un lien copié
+  if (ios && pxOwner()) return `<div class="px-inst"><b>📲 Installe l'appli sur ton iPhone</b><p class="small">Tes stats te suivront de soirée en soirée, où que tu joues.</p>
+    <button class="btn primary block" data-act="px-copie">1. Copier mon lien joueur</button>
+    <p class="small">2. Touche le bouton Partager de Safari (le carré avec la flèche), puis « Sur l'écran d'accueil ».</p>
+    <p class="small">3. Ouvre l'appli et colle le lien : tu retrouves ton profil et tes soirées.</p></div>`;
   return `<div class="px-inst"><b>📲 Garde l'appli sur ton téléphone</b><p class="small">Mets Los Ténébros sur ton écran d'accueil : tes stats te suivent de soirée en soirée, et tu auras ton QR joueur à montrer.</p>
     ${pxInstallEvt ? `<button class="btn primary block" data-act="px-install">Installer l'appli</button>` : `<p class="small muted">${ios ? "Dans Safari, touche le bouton Partager (le carré avec la flèche), puis « Sur l'écran d'accueil »." : "Ouvre le menu ⋮ du navigateur, puis « Ajouter à l'écran d'accueil » ou « Installer l'application »."}</p>`}</div>`;
 }
@@ -5362,7 +5406,7 @@ function pxSheet(sh) {
   if (sh.step === "px-done") {
     const o = pxOwner(); const nb = o ? Object.values(state.soirees).filter(s => (s.playerIds || []).includes(o.pid)).length : 0;
     return box("Soirée ajoutée", `<h3>Soirée ajoutée ✓</h3>${o ? `<p>${esc(state.players[o.pid].name)}, tu as maintenant <b>${nb} soirée${nb > 1 ? "s" : ""}</b> dans tes stats.</p>` : ""}
-      ${pxInstallHTML()}${o ? `<button class="btn block" data-act="px-stats">Voir mes stats</button>` : ""}${close}`);
+      ${pxInstallHTML()}${o && !pxInstallHTML() ? `<button class="btn block" data-act="px-stats">Voir mes stats</button>` : ""}${close}`);
   }
   if (sh.step === "px-qrj") {
     return box("QR joueur", `<h3>Le QR joueur de ${esc(sh.data.n)}</h3><p class="muted small">Pour l'ajouter à une soirée, le maître du jeu le scanne depuis l'appli : écran des joueurs, bouton 📷 Scanner les QR.</p>
@@ -5571,6 +5615,7 @@ function pxAction(act, el) {
     }
     case "px-stats": { const o = pxOwner(); ui.tab = "all"; ui.endSoiree = null; ui.partieId = null; ui.sheet = o ? { step: "profile", id: o.pid } : null; break; }
     case "px-install": if (pxInstallEvt) { pxInstallEvt.prompt(); pxInstallEvt = null; } break;
+    case "px-copie": pxCopieLien(); return;
     case "px-scan": pxScanOpen(); return;
     case "px-reprendre": {
       const d = ui.sheet && ui.sheet.data; if (!d || !d.g) return;
@@ -5605,6 +5650,25 @@ function pxAnciennesHTML(lastId) {
   if (!l.length) return "";
   return `<details class="px-old"><summary class="linkbtn">QR d'une soirée plus ancienne</summary><div class="pf-list">${l.map(s => `<button class="btn block" data-act="px-soiree" data-id="${s.id}">📲 ${esc(fmtDate(s.date))} · ${(s.playerIds || []).length} joueurs</button>`).join("")}</div></details>`;
 }
+// le lien joueur copié dans Safari, collé dans l'appli installée (iPhone : les deux ne partagent pas leurs données)
+async function pxLienMoi() { const o = pxOwner(); if (!o) return ""; return PX_SITE + "#j=" + await pxPack({ v: 1, g: o.g, n: state.players[o.pid].name, s: pxSummary(o.pid), ss: typeof saisonSummary === "function" ? saisonSummary(o.pid) : undefined }); }
+async function pxCopieLien() {
+  const url = await pxLienMoi(); if (!url) return;
+  const ok = () => toast("Lien copié. Installe l'appli, puis colle-le dedans.");
+  try { await navigator.clipboard.writeText(url); ok(); return; } catch (e) {}
+  const ta = document.createElement("textarea"); ta.value = url; document.body.appendChild(ta); ta.select();
+  try { document.execCommand("copy"); ok(); } catch (e) { toast("Copie impossible : fais une capture de ton QR joueur."); } ta.remove();
+}
+function pxCodeHTML() {
+  if (pxOwner() || !pxInstalled()) return "";
+  return `<div class="px-inst"><b>Tu as déjà ton profil ?</b><p class="small">Colle ici le lien copié avant d'installer l'appli.</p><form class="px-code"><input id="px-code" placeholder="Colle ton lien" autocomplete="off" aria-label="Ton lien joueur"><button class="btn" type="submit">OK</button></form></div>`;
+}
+document.addEventListener("submit", e => {
+  const f = e.target.closest("form.px-code"); if (!f) return; e.preventDefault();
+  const m = f.querySelector("input").value.match(/#j=([A-Za-z0-9_-]+)/);
+  if (!m) { toast("Ce n'est pas un lien joueur : recopie-le depuis Safari."); return; }
+  pxUnpack(m[1]).then(d => pxOpen("j", d)).catch(() => toast("Ce lien est abîmé : recopie-le."));
+});
 
 /* ---------- Saisons de 3 mois, Joueur du mois, classements par stat ---------- */
 const SAISONS = [["hiver", "Hiver", "❄️"], ["printemps", "Printemps", "🌸"], ["ete", "Été", "☀️"], ["automne", "Automne", "🍂"]];
