@@ -2858,7 +2858,7 @@ const GAMES = [
   { id: "sept", icon: "⏳", name: "7 secondes", mode: "gamelle", rank: "ok", mini: "sept", blurb: "3 réponses en 7 secondes", types: [{ id: "sept", label: "Raté" }] },
   { id: "ouinon", icon: "👍", name: "OUI ou NON Sans Débattre", mode: "gamelle", rank: "ok", mini: "ouinon", blurb: "Pour ou contre, sans réfléchir", types: [{ id: "ouinon", label: "A dit non" }] },
   { id: "quiz", icon: "🧠", name: "Quiz", mode: "gamelle", mini: "quiz", blurb: "4 choix, dont un absurde", types: [{ id: "quiz", label: "Mauvaise réponse" }] },
-  { id: "gd", icon: "⚖️", name: "Gauche ou droite", hidden: 1, mode: "gamelle", rank: "ok", mini: "gd", blurb: "C'est de gauche ou c'est de droite ?", types: [{ id: "gd", label: "Mauvais camp" }] },
+  { id: "gd", icon: "⚖️", name: "Gauche ou droite", mode: "gamelle", rank: "ok", mini: "gd", blurb: "C'est de gauche ou c'est de droite ?", types: [{ id: "gd", label: "Mauvais camp" }] },
   { id: "tp", icon: "🔀", name: "Tu préfères", mode: "gamelle", mini: "tp", blurb: "A ou B, la minorité boit", types: [{ id: "tp", label: "Minoritaire" }] },
   { id: "qp", icon: "👉", name: "Qui pourrait", mode: "gamelle", mini: "qp", blurb: "Tout le monde pointe quelqu'un", types: [{ id: "qp", label: "Désigné" }] },
   { id: "dx", icon: "🔟", name: "C'est un 10 mais…", mode: "gamelle", mini: "dx", blurb: "La note monte ou descend", types: [{ id: "dx", label: "Note descendue" }] },
@@ -3159,11 +3159,14 @@ function pfDrop(sid) {
   Object.values(state.parties).filter(p => p.soireeId === sid).forEach(p => remove("parties", p.id));
   remove("soirees", sid);
 }
+// début de la saison (remise à zéro du 23/10) : les soirées en ligne d'avant ne reviennent plus
+const PF_DEBUT = "2026-10-23T12:00:00.000Z";
 async function pfFetch() {
   const o = pxOwner(); if (!o) return; const g = state.players[o.pid].gid; if (!g) return;
   const snap = await pfColl().where("g", "array-contains", g).get(); const seen = new Set();
   for (const doc of snap.docs) {
     const v = doc.data(); let d; try { d = JSON.parse(v.j); } catch (e) { continue; }
+    if (String(d.d || "") < PF_DEBUT) continue;
     const loc = Object.values(state.soirees).find(s => s.id === d.i || s.src === d.i);
     if (loc && !loc.imported) continue;          // comptée ici même
     if (loc && (loc.pubT || 0) >= v.t) continue; // déjà à jour
@@ -3416,7 +3419,7 @@ async function pfSoireesDe(gids) {
   const out = {};
   for (let i = 0; i < gids.length; i += 30) {
     const snap = await pfColl().where("g", "array-contains-any", gids.slice(i, i + 30)).get();
-    snap.docs.forEach(doc => { try { out[doc.id] = pxClean(JSON.parse(doc.data().j)); } catch (e) {} });
+    snap.docs.forEach(doc => { try { const d = pxClean(JSON.parse(doc.data().j)); if (String(d.d || "") >= PF_DEBUT) out[doc.id] = d; } catch (e) {} });
   }
   return Object.values(out);
 }
@@ -7771,12 +7774,16 @@ document.addEventListener("submit", e => {
 });
 
 (function remiseAZero() {
-  const E = "2026-10-16", K = LS + "-remise";
+  const E = "2026-10-23", K = LS + "-remise";
   try {
     if (localStorage.getItem(K) === E) return;
     let keep = {}; try { const old = JSON.parse(localStorage.getItem(LS) || "{}"); Object.entries(old.records || {}).forEach(([k, v]) => { if (k.startsWith("vu-")) keep[k] = v; }); } catch (e) {}
-    localStorage.setItem(LS, JSON.stringify({ players: {}, soirees: {}, parties: {}, records: keep }));
-    localStorage.removeItem(DIRTY); localStorage.removeItem("lostenebros-moi"); localStorage.setItem(K, E);
+    // les soirées de ce soir (après le début de saison) restent, avec leurs parties
+    const D = "2026-10-23T12:00:00.000Z"; let old = {}; try { old = JSON.parse(localStorage.getItem(LS) || "{}"); } catch (e) {}
+    const so = {}, pa = {}; Object.values(old.soirees || {}).forEach(s => { if (String(s.date || "") >= D) so[s.id] = s; });
+    Object.values(old.parties || {}).forEach(p => { if (so[p.soireeId]) pa[p.id] = p; });
+    localStorage.setItem(LS, JSON.stringify({ players: old.players || {}, soirees: so, parties: pa, records: keep }));
+    [LS + "-publiees", LS + "-resume"].forEach(k => localStorage.removeItem(k)); localStorage.setItem(K, E);
   } catch (e) {}
 })();
 loadLocal();
