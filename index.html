@@ -525,6 +525,8 @@ html, body { max-width: 100%; } .app { min-width: 0; overflow-wrap: anywhere; }
 .gd-row .btn.good { border-color: #3f7d4e; background: rgba(63,125,78,.25); } .gd-row .btn.bad { border-color: var(--tenebres); background: rgba(200,40,60,.18); }
 .gd-row .btn:disabled { opacity: 1; }
 .gd-why { color: var(--muted); font-style: italic; margin: 0; max-width: 34ch; }
+header.top .brand { white-space: nowrap; overflow-wrap: normal; font-size: clamp(1.2rem, 6.6vw, 1.9rem); }
+@media (max-width: 420px) { header.top .brand { gap: 5px; } header.top .brand .seal { width: 26px; height: 26px; } .topr { gap: 6px; } }
 </style>
 
 <div class="app" id="app"></div>
@@ -3639,7 +3641,7 @@ function header() {
   const down = mode === "db" && canWrite && (netDown() || (offline && nWait));
   const label = mode === "db" ? (!canWrite ? "Lecture seule" : down ? "Hors ligne" : "") : "";
   const info = !label ? "" : label === "Lecture seule" ? "Lecture seule : tu peux consulter les scores, pas les modifier." : label === "Hors ligne" ? `Hors ligne : ${nWait ? nWait + " modification" + (nWait > 1 ? "s" : "") + " en attente, envoyée" + (nWait > 1 ? "s" : "") + " dès que le réseau revient" : "les scores sont gardés sur ce téléphone et partiront au retour du réseau"}.` : netBack ? "Le réseau est revenu : recharge l'appli pour partager les scores avec le groupe." : "Ce téléphone : les scores sont gardés seulement sur ce téléphone (pas de base partagée).";
-  return `<header class="top"><div class="topl">${ui.partieId && state.parties[ui.partieId] ? `<button class="q" data-act="rules" data-g="${state.parties[ui.partieId].game}" aria-label="Règles de ce jeu">?</button>` : `<button class="q" data-act="help" aria-label="Comment ça marche">?</button>`}<h1 class="brand"><span class="seal" aria-hidden="true">LT</span>Los Ténébros<span>.</span></h1></div><div class="topr">${label ? `<button type="button" class="sync ${mode === "local" || down ? "off" : ""}" data-act="sync-info" title="${esc(info)}" aria-label="${esc(info)}">${label}</button>` : ""}<button class="sound" data-act="sound" aria-label="${soundOn ? "Couper le son" : "Activer le son"}">${soundOn ? "🔊" : "🔇"}</button></div></header>`;
+  return `<header class="top"><div class="topl">${ui.partieId && state.parties[ui.partieId] ? `<button class="q" data-act="rules" data-g="${state.parties[ui.partieId].game}" aria-label="Règles de ce jeu">?</button>` : `<button class="q" data-act="help" aria-label="Comment ça marche">?</button>`}<h1 class="brand"><span class="seal" aria-hidden="true">LT</span>Los Ténébros<span>.</span></h1></div><div class="topr">${label ? `<button type="button" class="sync ${mode === "local" || down ? "off" : ""}" data-act="sync-info" title="${esc(info)}" aria-label="${esc(info)}">${label}</button>` : ""}<button class="sound qrb" data-act="px-mine" aria-label="Mon QR joueur et scanner"><svg viewBox="0 0 24 24" width="20" height="20" aria-hidden="true"><path fill="currentColor" d="M3 3h8v8H3zm2 2v4h4V5zm8-2h8v8h-8zm2 2v4h4V5zM3 13h8v8H3zm2 2v4h4v-4zm8-2h2v2h-2zm2 2h2v2h-2zm2-2h4v2h-4zm-4 4h2v4h-2zm4 0h4v4h-2v-2h-2zm-2 2h2v2h-2z"/></svg></button><button class="sound" data-act="sound" aria-label="${soundOn ? "Couper le son" : "Activer le son"}">${soundOn ? "🔊" : "🔇"}</button></div></header>`;
 }
 
 function boardHTML(map, ids, kind, unit, tap) {
@@ -3726,9 +3728,10 @@ function viewNewSoiree() {
   <section>
     <h3>Ce soir, qui part dans les ténèbres ?</h3>
     <p class="muted small">Touche les joueurs présents ou ajoute-les, puis lance la soirée.</p>
+    ${canWrite ? `<button class="btn primary block scanbtn" data-act="px-scan">📷 Ils ont l'appli ? Scanne leur QR joueur</button>` : ""}
     ${all.length ? `<div class="row">${all.map(p => `<button class="chip ${sel.has(p.id) ? "on" : ""}" data-act="pick" data-id="${p.id}" aria-pressed="${sel.has(p.id)}">${esc(p.name)}</button>`).join("")}</div>` : `<div class="empty">Aucun joueur pour l'instant. Ajoute le premier ci-dessous.</div>`}
     ${pfAmisHTML(sel)}${pxCodeHTML()}
-    ${canWrite ? addPlayerForm("new") + `<button class="btn block scanbtn" data-act="px-scan">📷 Scanner les QR des joueurs</button>` : ""}
+    ${canWrite ? addPlayerForm("new") : ""}
     ${all.length && canWrite ? `<button class="linkbtn" data-act="manage">Renommer ou supprimer un joueur</button>` : ""}
     <button class="btn primary block" data-act="new-soiree" ${sel.size < 2 || !canWrite ? "disabled" : ""}>Lancer la soirée (${sel.size} joueurs)</button>
   </section>
@@ -5388,11 +5391,12 @@ function pxSheet(sh) {
     const o = pxOwner();
     return box("Mon QR joueur", `<h3>Mon QR joueur</h3><p class="px-who-n">${esc(o ? state.players[o.pid].name : "")}</p>
       <div class="px-qr">${sh.svg || `<div class="empty">Le sceau se grave…</div>`}</div>
-      <p class="muted small center">En début de soirée, montre ce QR au maître du jeu : il le scanne depuis l'appli et tu arrives avec ton nom et tes stats.</p>${close}`);
+      <p class="muted small center">En début de soirée, montre ce QR au maître du jeu : il le scanne depuis l'appli, et à la fin tes scores arrivent tout seuls dans tes stats et tes cercles.</p>
+      <button class="btn block" data-act="px-scan">📷 Scanner un QR</button>${close}`);
   }
   if (sh.step === "px-soiree") {
     return box("Récupérer la soirée", `<h3>Chacun récupère la soirée</h3>
-      ${sh.url == null ? `<div class="empty">Le sceau se grave…</div>` : sh.svg ? `<div class="px-qr">${sh.svg}</div><p class="muted small center">Chacun scanne ce QR avec l'appareil photo de son téléphone : la soirée s'ajoute à ses stats, même s'il n'a pas encore l'appli.</p>` : `<p class="muted small">La soirée est trop longue pour tenir dans un QR. Envoie plutôt le lien dans votre groupe.</p>`}
+      ${sh.url == null ? `<div class="empty">Le sceau se grave…</div>` : sh.svg ? `<div class="px-qr">${sh.svg}</div><p class="muted small center">Chacun scanne ce QR avec l'appareil photo de son téléphone : la soirée s'ajoute à ses stats, même s'il n'a pas encore l'appli.</p><p class="small center"><b>Tu as déjà l'appli ?</b> Ouvre-la et scanne avec le bouton QR en haut, puis 📷.</p>` : `<p class="muted small">La soirée est trop longue pour tenir dans un QR. Envoie plutôt le lien dans votre groupe.</p>`}
       ${sh.url ? `<button class="btn primary block" data-act="px-send">📤 Envoyer le lien au groupe</button>` : ""}${close}`);
   }
   if (sh.step === "px-imp") {
