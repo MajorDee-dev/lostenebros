@@ -33,6 +33,7 @@ textarea{min-height:76px;resize:vertical}
 .btn.main[aria-disabled="true"]{opacity:.45;pointer-events:none}
 .btn.ghost{background:transparent;border:1px solid var(--line);color:var(--muted)}
 .note{color:var(--muted);font-size:.85rem;text-align:center;margin:0}
+.sec{font-family:var(--display);font-weight:400;font-size:1.7rem;margin:10px 0 -8px;color:var(--fg)}
 .ok{color:var(--gold);text-align:center;margin:0;min-height:1.2em}
 @media (prefers-reduced-motion:reduce){*{transition:none!important}}
 </style>
@@ -40,30 +41,54 @@ textarea{min-height:76px;resize:vertical}
 <div class="wrap">
   <header>
     <h1>Ton avis, mortel</h1>
-    <p class="sub">2 minutes pour améliorer l'appli de Los Ténébros. Touche tes réponses, écris seulement si tu veux.</p>
+    <p class="sub">3 minutes pour noter l'appli de Los Ténébros et dire ce qu'on doit améliorer. Touche tes réponses, écris seulement si tu veux.</p>
   </header>
 
   <div class="q"><label for="nom">Ton prénom</label><input id="nom" type="text" autocomplete="given-name" placeholder="Ex. Keran"></div>
 
-  <div class="q"><span class="lbl">Ta note de l'appli</span><div class="chips" id="note" data-single></div></div>
+  <div class="q"><span class="lbl">Ton téléphone</span><div class="chips" id="tel" data-single></div></div>
 
-  <div class="q"><span class="lbl">Tes jeux préférés</span><span class="hint">Plusieurs choix possibles</span><div class="chips" id="pref"></div></div>
+  <div class="q"><span class="lbl">Ta note de l'appli</span><span class="hint">1 = à jeter, 10 = parfait</span><div class="chips" id="note" data-single></div></div>
 
-  <div class="q"><span class="lbl">Le jeu que tu as le moins aimé</span><div class="chips" id="moins" data-single></div></div>
+  <h2 class="sec">Premiers pas</h2>
 
-  <div class="q"><label for="bug">Un bug ou un truc pas clair ?</label><span class="hint">Dis quel jeu ou quel écran</span><textarea id="bug"></textarea></div>
+  <div class="q"><span class="lbl">Au début, tu as compris comment ça marche ?</span><div class="chips" id="compris" data-single></div></div>
 
-  <div class="q"><span class="lbl">Compter les points pendant le jeu</span><div class="chips" id="points" data-single></div></div>
+  <div class="q"><span class="lbl">Les tutos animés des jeux de cartes</span><span class="hint">Bouton « Première fois ? » ou dans les règles</span><div class="chips" id="tutos" data-single></div></div>
 
-  <div class="q"><span class="lbl">Titres et trophées de fin de soirée</span><div class="chips" id="titres" data-single></div><input id="injuste" type="text" placeholder="Un titre injuste ? (facultatif)"></div>
+  <div class="q"><span class="lbl">Les règles derrière le « ? »</span><div class="chips" id="regles" data-single></div></div>
 
-  <div class="q"><span class="lbl">Le Rituel en équipe</span><div class="chips" id="rituel" data-single></div><input id="rituel2" type="text" placeholder="Un mini-jeu à virer ou à ajouter ? (facultatif)"></div>
+  <h2 class="sec">Pendant la soirée</h2>
 
-  <div class="q"><span class="lbl">Musiques et animations</span><div class="chips" id="musique" data-single></div></div>
+  <div class="q"><span class="lbl">Les jeux auxquels tu as joué</span><span class="hint">Plusieurs choix possibles</span><div class="chips" id="joue"></div></div>
+
+  <div class="q"><span class="lbl">Ton jeu préféré</span><div class="chips" id="pref" data-single></div></div>
+
+  <div class="q"><span class="lbl">Le jeu que tu as le moins aimé</span><div class="chips" id="moins" data-single></div><input id="moins2" type="text" placeholder="Pourquoi ? (facultatif)"></div>
+
+  <div class="q"><span class="lbl">Compter les points sur le téléphone</span><div class="chips" id="points" data-single></div></div>
+
+  <div class="q"><span class="lbl">Les points te paraissent justes ?</span><div class="chips" id="juste" data-single></div><input id="juste2" type="text" placeholder="Un jeu qui rapporte trop ou pas assez ? (facultatif)"></div>
+
+  <div class="q"><span class="lbl">Le look de l'appli</span><span class="hint">Couleurs, sceaux, animations</span><div class="chips" id="look" data-single></div></div>
+
+  <h2 class="sec">Fin de soirée</h2>
+
+  <div class="q"><span class="lbl">Titres, trophées et résumé de fin</span><div class="chips" id="titres" data-single></div></div>
+
+  <div class="q"><span class="lbl">Le QR « Chacun récupère ses stats »</span><div class="chips" id="qr" data-single></div></div>
+
+  <h2 class="sec">Et maintenant</h2>
+
+  <div class="q"><label for="bug">Un bug ou un truc pas clair ?</label><span class="hint">Dis sur quel jeu ou quel écran, et ce qui s'est passé</span><textarea id="bug"></textarea></div>
+
+  <div class="q"><label for="ameliore">La première chose à améliorer</label><textarea id="ameliore"></textarea></div>
 
   <div class="q"><label for="manque">Qu'est-ce qui manque ?</label><span class="hint">Un jeu, une option, un mode…</span><textarea id="manque"></textarea></div>
 
-  <div class="q"><span class="lbl">Tu l'installerais pour jouer sans Clément ?</span><div class="chips" id="install" data-single></div></div>
+  <div class="q"><span class="lbl">Tu la conseillerais à tes potes ?</span><div class="chips" id="conseil" data-single></div></div>
+
+  <div class="q"><span class="lbl">Tu paierais quelques euros pour des jeux ou des thèmes en plus ?</span><div class="chips" id="payer" data-single></div></div>
 
   <div class="q"><label for="fin">Le mot de la fin</label><textarea id="fin"></textarea></div>
 
@@ -71,25 +96,32 @@ textarea{min-height:76px;resize:vertical}
     <a class="btn main" id="send" href="#" target="_blank" rel="noopener" aria-disabled="true">Envoyer à Clément sur WhatsApp</a>
     <button class="btn ghost" id="copy" type="button">Copier mes réponses</button>
     <p class="ok" id="ok" aria-live="polite"></p>
-    <p class="note">WhatsApp s'ouvre avec tes réponses déjà écrites : choisis Clément ou le groupe et envoie.</p>
+    <p class="note">WhatsApp s'ouvre avec tes réponses déjà écrites : choisis Clément et envoie.</p>
   </div>
 </div>
 
 <script>
 const JEUX=["Le Barbu","PMU","Biscit","Le Kinito","Tracks","Purple","La Pyramide","Quiz","7 secondes","OUI ou NON","Tu préfères","Qui pourrait","C'est un 10 mais…","Le Rituel en équipe"];
 const OPTS={
+  tel:["iPhone","Android"],
   note:["1","2","3","4","5","6","7","8","9","10"],
-  pref:JEUX, moins:JEUX,
-  points:["Rapide","Correct","Ça ralentit"],
+  compris:["Tout de suite","Après un peu d'aide","Pas vraiment"],
+  tutos:["Super clairs","Moyens","Pas clairs","Pas vus"],
+  regles:["Claires","Trop longues","Pas claires","Pas lues"],
+  joue:JEUX, pref:JEUX, moins:JEUX,
+  points:["Rapide","Correct","Ça ralentit le jeu"],
+  juste:["Oui","Pas toujours","Non"],
+  look:["J'adore","Correct","Pas mon style"],
   titres:["Ça motive","Bof","Pas fait attention"],
-  rituel:["Trop long","Parfait","Trop court","Pas joué"],
-  musique:["Trop","C'est bien","Pas assez","Pas entendu"],
-  install:["Oui","Peut-être","Non"]
+  qr:["Ça a marché","Ça a bugué","Pas essayé"],
+  conseil:["Oui","Peut-être","Non"],
+  payer:["Oui","Peut-être","Non"]
 };
-const LABELS={note:"Note /10",pref:"Jeux préférés",moins:"Moins aimé",bug:"Bug / pas clair",points:"Compter les points",titres:"Titres et trophées",injuste:"Titre injuste",rituel:"Rituel",rituel2:"Mini-jeu à virer/ajouter",musique:"Musiques et animations",manque:"Ce qui manque",install:"Installerait",fin:"Mot de la fin"};
-const ORDER=["note","pref","moins","bug","points","titres","injuste","rituel","rituel2","musique","manque","install","fin"];
+const LABELS={tel:"Téléphone",note:"Note /10",compris:"Compris au début",tutos:"Tutos animés",regles:"Règles",joue:"A joué à",pref:"Préféré",moins:"Moins aimé",moins2:"Pourquoi",points:"Compter les points",juste:"Points justes",juste2:"Jeu trop/pas assez payé",look:"Look",titres:"Titres et trophées",qr:"QR stats",bug:"Bug / pas clair",ameliore:"À améliorer en premier",manque:"Ce qui manque",conseil:"Conseillerait",payer:"Paierait",fin:"Mot de la fin"};
+const ORDER=["tel","note","compris","tutos","regles","joue","pref","moins","moins2","points","juste","juste2","look","titres","qr","bug","ameliore","manque","conseil","payer","fin"];
+const TEXTS=["nom","moins2","juste2","bug","ameliore","manque","fin"];
 const state={};
-const KEY="avis-tenebros-brouillon";
+const KEY="avis-tenebros-v2-brouillon";
 try{Object.assign(state,JSON.parse(localStorage.getItem(KEY)||"{}"))}catch(e){}
 
 for(const [id,list] of Object.entries(OPTS)){
@@ -108,14 +140,14 @@ for(const [id,list] of Object.entries(OPTS)){
     box.appendChild(b);
   });
 }
-["nom","bug","injuste","rituel2","manque","fin"].forEach(id=>{
+TEXTS.forEach(id=>{
   const el=document.getElementById(id);
   if(typeof state[id]==="string") el.value=state[id];
   el.addEventListener("input",()=>{state[id]=el.value;update()});
 });
 
 function texte(){
-  const lines=["#AvisTenebros — "+(state.nom||"").trim()];
+  const lines=["#AvisTenebros2 — "+(state.nom||"").trim()];
   for(const k of ORDER){
     const v=Array.isArray(state[k])?state[k].join(", "):(state[k]||"").trim();
     if(v) lines.push(LABELS[k]+" : "+v);
