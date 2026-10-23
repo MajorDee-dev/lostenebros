@@ -3179,7 +3179,7 @@ function pfLink(sid, idx) {
 }
 // côté téléphone qui a compté : les soirées des 3 derniers jours où un joueur n'a pas encore de profil
 async function pfLearn() {
-  const lim = Date.now() - 3 * 864e5;
+  const lim = Date.now() - 30 * 864e5;
   for (const s of Object.values(state.soirees)) {
     if (!s.closed || s.imported || new Date(s.closedAt || 0) < lim) continue;
     if (s.playerIds.every(id => (state.players[id] || {}).gid)) continue;
@@ -3222,6 +3222,7 @@ async function pfCerclesFetch() {
   const me = pfMoi(); if (!me) return;
   const snap = await FB_FS.collection("groupes").doc(PF_BASE).collection("cercles").where("m." + me.gid, ">", 0).get();
   const l = snap.docs.map(d => ({ id: d.id, n: d.data().n }));
+  pfAmisFetch(snap.docs).catch(() => {});
   if (JSON.stringify(l.map(c => c.id).sort()) !== JSON.stringify(pfMine().map(c => c.id).sort())) { pfSaveMine(l); render(); }
 }
 function pfWaitDb() { return new Promise(ok => { let n = 0; const t = setInterval(() => { if (FB_FS || ++n > 60) { clearInterval(t); ok(!!FB_FS); } }, 250); }); }
@@ -3364,6 +3365,43 @@ async function pfDelete() {
     try { localStorage.removeItem(PX_MOI); localStorage.removeItem(PF_RES); localStorage.removeItem(PF_PUB); } catch (e) {}
     pfSaveMine([]); ui.sheet = null; toast("Ton profil en ligne est effacé."); render();
   } catch (e) { toast("Pas de réseau : rien n'a été effacé, réessaie."); ui.sheet = null; render(); }
+}
+/* ---------- Les membres de mes cercles, proposés quand on crée une soirée (2026-10-23) ----------
+   Toucher « Ana · Los Ténébros » crée (ou relie) le joueur avec son profil : la soirée lui arrivera
+   sans scanner de QR, même si elle n'a jamais joué sur ce téléphone. */
+const PF_AMIS = LS + "-amis"; // [{g, n, c}] : membres de mes cercles (moi exclu)
+function pfAmis() { try { return JSON.parse(localStorage.getItem(PF_AMIS) || "[]") || []; } catch (e) { return []; } }
+async function pfAmisFetch(docs) {
+  const me = pfMoi(); if (!me) return;
+  const by = {};
+  docs.forEach(d => Object.keys(d.data().m || {}).forEach(g => { if (g !== me.gid && !by[g]) by[g] = d.data().n || ""; }));
+  const out = [];
+  await Promise.all(Object.keys(by).slice(0, 300).map(async g => {
+    try { const p = await pfProfils().doc(g).get(); if (p.exists && !p.data().deleted && p.data().n) out.push({ g, n: String(p.data().n).slice(0, 24), c: String(by[g]).slice(0, 30) }); } catch (e) {}
+  }));
+  out.sort((a, b) => a.n.localeCompare(b.n));
+  const old = localStorage.getItem(PF_AMIS) || "[]", nw = JSON.stringify(out);
+  if (old !== nw) { try { localStorage.setItem(PF_AMIS, nw); } catch (e) {} render(); }
+}
+function pfAmisHTML(sel) {
+  const known = new Set(Object.values(state.players).filter(p => p.gid && !p.hidden).map(p => p.gid));
+  const l = pfAmis().filter(a => !known.has(a.g) && !pfIsDead(a.g));
+  if (!l.length) return "";
+  return `<p class="muted small">De tes cercles</p><div class="row">${l.map(a => `<button class="chip" data-act="px-ami" data-g="${esc(a.g)}">${esc(a.n)} <small class="muted">· ${esc(a.c)}</small></button>`).join("")}</div>`;
+}
+function pfAmiPick(g) {
+  const a = pfAmis().find(x => x.g === g); if (!a) return;
+  const k = pxNorm(a.n); const list = Object.values(state.players);
+  let pl = list.find(p => p.gid === g) || list.find(p => !p.gid && pxNorm(p.name) === k);
+  let rec;
+  if (pl) rec = Object.assign({}, pl, { gid: g, hidden: false });
+  else {
+    let name = a.n; if (list.some(p => pxNorm(p.name) === k)) name = (a.n + " (" + a.c + ")").slice(0, 24);
+    rec = { id: uid(), name, gid: g, created: new Date().toISOString() };
+  }
+  put("players", rec.id, rec);
+  if (!(ui.newSoireePlayers || []).includes(rec.id)) ui.newSoireePlayers = (ui.newSoireePlayers || []).concat(rec.id);
+  render();
 }
 
 /* ---------- Chaque téléphone garde ses soirées (2026-10-23) ----------
@@ -3650,6 +3688,7 @@ function viewNewSoiree() {
     <h3>Ce soir, qui part dans les ténèbres ?</h3>
     <p class="muted small">Touche les joueurs présents ou ajoute-les, puis lance la soirée.</p>
     ${all.length ? `<div class="row">${all.map(p => `<button class="chip ${sel.has(p.id) ? "on" : ""}" data-act="pick" data-id="${p.id}" aria-pressed="${sel.has(p.id)}">${esc(p.name)}</button>`).join("")}</div>` : `<div class="empty">Aucun joueur pour l'instant. Ajoute le premier ci-dessous.</div>`}
+    ${pfAmisHTML(sel)}
     ${canWrite ? addPlayerForm("new") + `<button class="btn block scanbtn" data-act="px-scan">📷 Scanner les QR des joueurs</button>` : ""}
     ${all.length && canWrite ? `<button class="linkbtn" data-act="manage">Renommer ou supprimer un joueur</button>` : ""}
     <button class="btn primary block" data-act="new-soiree" ${sel.size < 2 || !canWrite ? "disabled" : ""}>Lancer la soirée (${sel.size} joueurs)</button>
@@ -3740,7 +3779,7 @@ function viewAllTimeBase() {
   const csTop = sortBoard(cs, ids)[0];
   const last = Object.values(state.soirees).filter(s => s.closed).sort((a, b) => b.date.localeCompare(a.date))[0];
   return `
-  ${last ? `<section><h2>Dernière soirée, ${esc(fmtDate(last.date))}</h2>${titlesHTML(last.titles || [])}<button class="btn block" data-act="recap" data-id="${last.id}">📜 Partager le résumé</button><button class="btn block" data-act="px-soiree" data-id="${last.id}">📲 Chacun récupère ses stats</button></section>` : ""}
+  ${last ? `<section><h2>Dernière soirée, ${esc(fmtDate(last.date))}</h2>${titlesHTML(last.titles || [])}<button class="btn block" data-act="recap" data-id="${last.id}">📜 Partager le résumé</button><button class="btn block" data-act="px-soiree" data-id="${last.id}">📲 Chacun récupère ses stats</button>${pxAnciennesHTML(last.id)}</section>` : ""}
   <section>
     <h2>Depuis le début</h2>
     <div class="stat">
@@ -5515,6 +5554,7 @@ function pxAction(act, el) {
       else if (ui.sheet && ui.sheet.step === "px-who") pxShowMine();
       return;
     case "px-soiree": pxShowSoiree(el.dataset.id); return;
+    case "px-ami": if (typeof pfAmiPick === "function") pfAmiPick(el.dataset.g); return;
     case "px-send": {
       const url = ui.sheet && ui.sheet.url; if (!url) return;
       const text = "Récupère la soirée Los Ténébros dans tes stats :";
@@ -5559,6 +5599,12 @@ function pxBoot() {
   pxUnpack(m[2]).then(d => pxOpen(m[1], d)).catch(() => toast("Ce lien est abîmé : redemande le QR."));
 }
 window.addEventListener("hashchange", pxBoot);
+// le QR de fin d'une ancienne soirée (pour quelqu'un qui n'a pas scanné le soir même)
+function pxAnciennesHTML(lastId) {
+  const l = Object.values(state.soirees).filter(s => s.closed && !s.imported && s.id !== lastId && s.date).sort((a, b) => b.date.localeCompare(a.date)).slice(0, 12);
+  if (!l.length) return "";
+  return `<details class="px-old"><summary class="linkbtn">QR d'une soirée plus ancienne</summary><div class="pf-list">${l.map(s => `<button class="btn block" data-act="px-soiree" data-id="${s.id}">📲 ${esc(fmtDate(s.date))} · ${(s.playerIds || []).length} joueurs</button>`).join("")}</div></details>`;
+}
 
 /* ---------- Saisons de 3 mois, Joueur du mois, classements par stat ---------- */
 const SAISONS = [["hiver", "Hiver", "❄️"], ["printemps", "Printemps", "🌸"], ["ete", "Été", "☀️"], ["automne", "Automne", "🍂"]];
