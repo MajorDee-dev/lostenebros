@@ -2951,7 +2951,7 @@ window.addEventListener("offline", () => render());
 // (seulement si ce téléphone a déjà fait sa première synchro ; sinon on propose de recharger)
 let netBack = false, reconnecting = false;
 async function reconnectLocal() {
-  if (mode !== "local" || reconnecting || typeof fbDb !== "function") return;
+  return;
   let init = false; try { init = localStorage.getItem(FB_INIT) === FB_GROUPE; } catch (e) {}
   if (!init) { netBack = true; render(); return; }
   reconnecting = true;
@@ -2993,8 +2993,7 @@ function listen(c) {
 async function connect() {
   let cl = null;
   try { cl = window.claude && window.claude.use ? await window.claude.use("db") : null; } catch (e) { cl = null; }
-  if (!cl) cl = await fbDb();
-  if (!cl) { mode = "local"; render(); return; }
+  if (!cl) { mode = "local"; render(); await fbInit(); if (typeof pfSync === "function") pfSync(true); return; }
   db = cl; mode = "db";
   try {
     const user = await window.claude.use("user");
@@ -3367,6 +3366,37 @@ async function pfDelete() {
   } catch (e) { toast("Pas de réseau : rien n'a été effacé, réessaie."); ui.sheet = null; render(); }
 }
 
+/* ---------- Chaque téléphone garde ses soirées (2026-10-23) ----------
+   Avant : tous les téléphones du site partageaient une seule base (le groupe Los Ténébros).
+   Maintenant : Firebase ne sert plus qu'aux profils et aux cercles (FB_FS). Les soirées des autres
+   arrivent par le QR de fin et les profils. Une seule fois par téléphone : on retire ce qui venait
+   du groupe commun et ne concerne pas le propriétaire du téléphone. */
+const FB_SEPARE = LS + "-separe";
+async function fbInit() {
+  if (!FB_CONF || !FB_CONF.projectId) return;
+  try {
+    const V = "https://www.gstatic.com/firebasejs/10.12.2/";
+    await fbScript(V + "firebase-app-compat.js");
+    await fbScript(V + "firebase-firestore-compat.js");
+    FB_FS = FB_FS || firebase.firestore(firebase.apps && firebase.apps.length ? firebase.app() : firebase.initializeApp(FB_CONF));
+    await fbAuth(V);
+  } catch (e) {}
+}
+function fbSepare() {
+  try { if (localStorage.getItem(FB_SEPARE)) return; } catch (e) { return; }
+  const o = pxOwner();
+  if (o) {
+    Object.values(state.soirees).filter(s => !(s.playerIds || []).includes(o.pid)).forEach(s => {
+      Object.values(state.parties).filter(p => p.soireeId === s.id).forEach(p => delete state.parties[p.id]);
+      delete state.soirees[s.id];
+    });
+    const used = pxRefs();
+    Object.values(state.players).forEach(p => { if (!used.has(p.id) && !p.hidden && p.id !== o.pid) state.players[p.id] = Object.assign({}, p, { hidden: true }); });
+  }
+  saveLocal(); dirty = {}; saveDirty();
+  try { localStorage.setItem(FB_SEPARE, "1"); } catch (e) {}
+}
+
 /* ---------- Calculs ---------- */
 // pendant la soirée, les vaincus du Rituel portent leur nom de la honte
 const name = id => { const s = activeSoiree(); return (s && s.honte && s.honte[id]) || state.players[id]?.name || "?"; };
@@ -3530,7 +3560,7 @@ function toast(msg) {
 function header() {
   const nWait = Object.keys(dirty).length;
   const down = mode === "db" && canWrite && (netDown() || (offline && nWait));
-  const label = mode === "db" ? (!canWrite ? "Lecture seule" : down ? "Hors ligne" : "") : mode === "local" ? (netBack ? "Réseau revenu : recharger" : "Ce téléphone") : "";
+  const label = mode === "db" ? (!canWrite ? "Lecture seule" : down ? "Hors ligne" : "") : "";
   const info = !label ? "" : label === "Lecture seule" ? "Lecture seule : tu peux consulter les scores, pas les modifier." : label === "Hors ligne" ? `Hors ligne : ${nWait ? nWait + " modification" + (nWait > 1 ? "s" : "") + " en attente, envoyée" + (nWait > 1 ? "s" : "") + " dès que le réseau revient" : "les scores sont gardés sur ce téléphone et partiront au retour du réseau"}.` : netBack ? "Le réseau est revenu : recharge l'appli pour partager les scores avec le groupe." : "Ce téléphone : les scores sont gardés seulement sur ce téléphone (pas de base partagée).";
   return `<header class="top"><div class="topl">${ui.partieId && state.parties[ui.partieId] ? `<button class="q" data-act="rules" data-g="${state.parties[ui.partieId].game}" aria-label="Règles de ce jeu">?</button>` : `<button class="q" data-act="help" aria-label="Comment ça marche">?</button>`}<h1 class="brand"><span class="seal" aria-hidden="true">LT</span>Los Ténébros<span>.</span></h1></div><div class="topr">${label ? `<button type="button" class="sync ${mode === "local" || down ? "off" : ""}" data-act="sync-info" title="${esc(info)}" aria-label="${esc(info)}">${label}</button>` : ""}<button class="sound" data-act="sound" aria-label="${soundOn ? "Couper le son" : "Activer le son"}">${soundOn ? "🔊" : "🔇"}</button></div></header>`;
 }
@@ -7637,6 +7667,7 @@ document.addEventListener("submit", e => {
 })();
 loadLocal();
 render();
+if (typeof fbSepare === "function") fbSepare();
 connect();
 pxBoot();
 pxDedupSoon();
